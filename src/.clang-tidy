@@ -1,0 +1,13 @@
+Checks: >
+    -*,
+    modernize-loop-convert,
+    modernize-avoid-c-arrays,
+    modernize-use-default-member-init,
+    readability-non-const-parameter,
+    readability-function-cognitive-complexity,
+    readability-isolate-declaration,
+    cppcoreguidelines-pro-type-member-init,
+    clang-diagnostic-*,
+    llvm-*,
+    misc-*,
+    -misc-non-private-member-variables-in-classes

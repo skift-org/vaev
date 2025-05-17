@@ -1,0 +1,17 @@
+{
+    "$schema": "https://schemas.cute.engineering/stable/cutekit.manifest.project.v1",
+    "id": "skift-org/vaev",
+    "type": "project",
+    "version": "v0.1.0",
+    "description": "A lightning-fast, lightweight, and secure HTML/CSS engine",
+    "extern": {
+        "skift-org/karm": {
+            "git": "https://github.com/skift-org/karm.git",
+            "tag": "latest"
+        },
+        "skift-org/hideo": {
+            "git": "https://github.com/skift-org/hideo.git",
+            "tag": "latest"
+        }
+    }
+}
