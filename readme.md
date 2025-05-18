@@ -5,27 +5,52 @@
     <img src="doc/assets/vaev.png" width="320">
 </p>
 <p align="center">
-    A lightning-fast, lightweight, and secure HTML/CSS engine
-built for effortless document generation and streamlined web browsing.
+    An experimental web browser engine
 </p>
 <br/>
 
 ![](doc/assets/capture.png)
 
-<br/>
-<br/>
+## Features
 
-## Supported Standards
+Veav currently supports a subset of web standards, including:
 
-Veav aims to support the following standards:
+- Most display types (excluding grid)
+- Standard CSS cascade behavior
+- Pagination using @page rules
+- Print-to-PDF output
+- All CSS units, including percentages, var(), and calc()
+- Loading of HTML and XHTML documents
+- Very basic networking, only `http://` and `file://` is supported
 
-- [CSS Latest Snapshot](https://www.w3.org/TR/CSS)
-- [HTML Living Standard](https://html.spec.whatwg.org/multipage/)
-- [SVG 2](https://www.w3.org/TR/SVG2/)
-- [MathML 3](https://www.w3.org/TR/MathML3/)
-- [XML 1.0](https://www.w3.org/TR/REC-xml/)
+For detailed compatibility and feature tracking, see our [WPT status page](https://vaev-org.github.io/wpt-status/)
+
+## Trying It Out
+
+You can try out Veav by running the following command:
+
+```bash
+pacman -S base-devel git ninja sdl2 nasm gcc-multilib liburing clang libseccomp
+
+# We need llvm 20 and arch doesn't have it yet
+yay -S clang-prefixed-release
+
+git clone https://github.com/skift-org/vaev.git
+
+cd vaev
+
+pip install git+https://github.com/cute-engineering/cutekit
+
+python -m ck run --release vaev-browser -- file.html
+```
 
 ## Architecture
 
-An [architecture diagram](diagrams.tldr) is available next to this file. It's in the tldraw format.
+An [architecture diagram](doc/diagrams.tldr) is available next to this file. It's in the tldraw format.
 
+## Authors
+
+ - [Lou !](https://github.com/Louciole)
+ - [LuneMercier](https://github.com/LuneMercier)
+ - [Paulo Medeiros](https://github.com/pauloamed)
+ - [Sleepy Monax](https://github.com/sleepy-monax)
