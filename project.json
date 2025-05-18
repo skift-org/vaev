@@ -7,11 +7,11 @@
     "extern": {
         "skift-org/karm": {
             "git": "https://github.com/skift-org/karm.git",
-            "tag": "latest"
+            "tag": "main"
         },
         "skift-org/hideo": {
             "git": "https://github.com/skift-org/hideo.git",
-            "tag": "latest"
+            "tag": "main"
         }
     }
 }
