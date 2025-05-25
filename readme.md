@@ -41,7 +41,7 @@ cd vaev
 
 pip install git+https://github.com/cute-engineering/cutekit
 
-python -m ck run --release vaev-browser -- file.html
+python -m cutekit run --release vaev-browser -- file.html
 ```
 
 ## Architecture
