@@ -30,7 +30,7 @@ For detailed compatibility and feature tracking, see our [WPT status page](https
 You can try out Veav by running the following command:
 
 ```bash
-pacman -S base-devel git ninja sdl2 nasm gcc-multilib liburing clang libseccomp
+pacman -S base-devel git ninja sdl2 nasm gcc-multilib liburing clang libseccomp lld
 
 # We need llvm 20 and arch doesn't have it yet
 yay -S clang-prefixed-release
