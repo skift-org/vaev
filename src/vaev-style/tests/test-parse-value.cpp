@@ -1,7 +1,6 @@
 #include <karm-test/macros.h>
 #include <vaev-style/decls.h>
 #include <vaev-style/props.h>
-#include <vaev-style/values.h>
 
 namespace Vaev::Style::Tests {
 
@@ -74,7 +73,7 @@ test$("vaev-css-build-margin") {
         auto res = parseDeclaration<StyleProp>(sst);
         expect$(res);
 
-        ComputedStyle c;
+        SpecifiedValues c;
         res.unwrap().apply(c, c);
 
         expectEq$(Io::format("{}", *c.margin), Io::format("{}", expected));

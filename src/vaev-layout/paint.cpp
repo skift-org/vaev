@@ -3,7 +3,9 @@ module;
 #include <karm-scene/box.h>
 #include <karm-scene/clip.h>
 #include <karm-scene/image.h>
+#include <karm-scene/stack.h>
 #include <karm-scene/text.h>
+#include <karm-scene/transform.h>
 #include <vaev-style/computer.h>
 
 export module Vaev.Layout:paint;
@@ -69,7 +71,9 @@ static bool _paintOutline(Frag& frag, Gfx::Color currentColor, Gfx::Outline& out
 }
 
 static bool _needsNewStackingContext(Frag const& frag) {
-    return frag.style().zIndex != Keywords::AUTO or frag.style().clip.has();
+    return frag.style().zIndex != Keywords::AUTO or
+           frag.style().clip.has() or
+           frag.style().transform->has();
 }
 
 static void _paintFragBordersAndBackgrounds(Frag& frag, Scene::Stack& stack) {
@@ -136,40 +140,20 @@ static void _paintChildren(Frag& frag, Scene::Stack& stack, auto predicate) {
     }
 }
 
-static void _paintStackingContext(Frag& frag, Scene::Stack& stack) {
-    // 1. the background and borders of the element forming the stacking context.
-    _paintFrag(frag, stack);
-
-    // 2. the child stacking contexts with negative stack levels (most negative first).
-    _paintChildren(frag, stack, [](Style::ComputedStyle const& s) -> bool {
-        return s.zIndex.unwrapOr<isize>(0) < 0;
-    });
-
-    // 3. the in-flow, non-inline-level, non-positioned descendants.
-    _paintChildren(frag, stack, [](Style::ComputedStyle const& s) {
-        return s.zIndex == Keywords::AUTO and s.display != Display::INLINE and s.position == Position::STATIC;
-    });
-
-    // 4. the non-positioned floats.
-    _paintChildren(frag, stack, [](Style::ComputedStyle const& s) {
-        return s.zIndex == Keywords::AUTO and s.position == Position::STATIC and s.float_ != Float::NONE;
-    });
-
-    // 5. the in-flow, inline-level, non-positioned descendants, including inline tables and inline blocks.
-    _paintChildren(frag, stack, [](Style::ComputedStyle const& s) {
-        return s.zIndex == Keywords::AUTO and s.display == Display::INLINE and s.position == Position::STATIC;
-    });
-
-    // 6. the child stacking contexts with stack level 0 and the positioned descendants with stack level 0.
-    _paintChildren(frag, stack, [](Style::ComputedStyle const& s) {
-        return s.zIndex.unwrapOr<isize>(0) == 0 and s.position != Position::STATIC;
-    });
-
-    // 7. the child stacking contexts with positive stack levels (least positive first).
-    _paintChildren(frag, stack, [](Style::ComputedStyle const& s) {
-        return s.zIndex.unwrapOr<isize>(0) > 0;
-    });
+static Math::Radiif _resolveRadii(Resolver& resolver, Math::Radii<CalcValue<PercentOr<Length>>> const& baseRadii, RectAu const& referenceBox) {
+    Math::Radiif radii;
+    radii.a = resolver.resolve(baseRadii.a, referenceBox.height).cast<f64>();
+    radii.b = resolver.resolve(baseRadii.b, referenceBox.width).cast<f64>();
+    radii.c = resolver.resolve(baseRadii.c, referenceBox.width).cast<f64>();
+    radii.d = resolver.resolve(baseRadii.d, referenceBox.height).cast<f64>();
+    radii.e = resolver.resolve(baseRadii.e, referenceBox.height).cast<f64>();
+    radii.f = resolver.resolve(baseRadii.f, referenceBox.width).cast<f64>();
+    radii.g = resolver.resolve(baseRadii.g, referenceBox.width).cast<f64>();
+    radii.h = resolver.resolve(baseRadii.h, referenceBox.height).cast<f64>();
+    return radii;
 }
+
+// MARK: Background ------------------------------------------------------------
 
 static Math::Vec2f _resolveBackgroundPosition(Resolver& resolver, BackgroundPosition const& position, RectAu const& referenceBox) {
     Math::Vec2f result;
@@ -193,20 +177,9 @@ static Math::Vec2f _resolveBackgroundPosition(Resolver& resolver, BackgroundPosi
     return result;
 }
 
-static Math::Radiif _resolveRadii(Resolver& resolver, Math::Radii<CalcValue<PercentOr<Length>>> const& baseRadii, RectAu const& referenceBox) {
-    Math::Radiif radii;
-    radii.a = resolver.resolve(baseRadii.a, referenceBox.height).cast<f64>();
-    radii.b = resolver.resolve(baseRadii.b, referenceBox.width).cast<f64>();
-    radii.c = resolver.resolve(baseRadii.c, referenceBox.width).cast<f64>();
-    radii.d = resolver.resolve(baseRadii.d, referenceBox.height).cast<f64>();
-    radii.e = resolver.resolve(baseRadii.e, referenceBox.height).cast<f64>();
-    radii.f = resolver.resolve(baseRadii.f, referenceBox.width).cast<f64>();
-    radii.g = resolver.resolve(baseRadii.g, referenceBox.width).cast<f64>();
-    radii.h = resolver.resolve(baseRadii.h, referenceBox.height).cast<f64>();
-    return radii;
-}
+// MARK: Clipping --------------------------------------------------------------
 
-static Rc<Scene::Clip> _resolveClip(Frag const& frag) {
+static Rc<Scene::Clip> _applyClip(Frag const& frag, Rc<Scene::Node> content) {
     Math::Path result;
     auto& clip = frag.style().clip.unwrap();
 
@@ -237,7 +210,7 @@ static Rc<Scene::Clip> _resolveClip(Frag const& frag) {
 
     if (not clip.shape) {
         result.rect(referenceBox.round().cast<f64>(), radii.cast<f64>());
-        return makeRc<Scene::Clip>(result);
+        return makeRc<Scene::Clip>(content, result);
     }
 
     auto resolver = Resolver();
@@ -260,7 +233,7 @@ static Rc<Scene::Clip> _resolveClip(Frag const& frag) {
                 );
             }
 
-            return makeRc<Scene::Clip>(result, polygon.fillRule);
+            return makeRc<Scene::Clip>(content, result, polygon.fillRule);
         },
         [&](Circle const& circle) {
             auto center = _resolveBackgroundPosition(resolver, circle.position, referenceBox);
@@ -290,7 +263,7 @@ static Rc<Scene::Clip> _resolveClip(Frag const& frag) {
             }
             result.ellipse(Math::Ellipsef(center + referenceBox.xy.cast<f64>(), radius));
 
-            return makeRc<Scene::Clip>(result);
+            return makeRc<Scene::Clip>(content, result);
         },
         [&](Inset const& inset) {
             Math::Insetsf resolved;
@@ -303,7 +276,7 @@ static Rc<Scene::Clip> _resolveClip(Frag const& frag) {
 
             result.rect(referenceBox.cast<f64>().shrink(resolved), resolvedRadii);
 
-            return makeRc<Scene::Clip>(result);
+            return makeRc<Scene::Clip>(content, result);
         },
         [&](Xywh const& xywh) {
             Math::Rectf resolvedRect;
@@ -316,7 +289,7 @@ static Rc<Scene::Clip> _resolveClip(Frag const& frag) {
 
             result.rect(resolvedRect.offset(referenceBox.xy.cast<f64>()), resolvedRadii);
 
-            return makeRc<Scene::Clip>(result);
+            return makeRc<Scene::Clip>(content, result);
         },
         [&](Rect const& rect) {
             Math::Insetsf resolvedInsets;
@@ -335,7 +308,7 @@ static Rc<Scene::Clip> _resolveClip(Frag const& frag) {
 
             result.rect(resultBox, resolvedRadii);
 
-            return makeRc<Scene::Clip>(result);
+            return makeRc<Scene::Clip>(content, result);
         },
         [&](Ellipse const& ellipse) {
             auto center = _resolveBackgroundPosition(resolver, ellipse.position, referenceBox);
@@ -367,26 +340,206 @@ static Rc<Scene::Clip> _resolveClip(Frag const& frag) {
             }
             result.ellipse(Math::Ellipsef(center + referenceBox.xy.cast<f64>(), Math::Vec2f(rx, ry)));
 
-            return makeRc<Scene::Clip>(result);
+            return makeRc<Scene::Clip>(content, result);
         },
         [&](Path const& path) {
             result.path(path.path);
             result.offset(referenceBox.xy.cast<f64>());
-            return makeRc<Scene::Clip>(result, path.fillRule);
+            return makeRc<Scene::Clip>(content, result, path.fillRule);
         },
     });
 }
 
+// MARK: Transformations -------------------------------------------------------
+
+static RectAu _resolveTransformReferenceBox(Metrics const& metrics, TransformBox box) {
+    return box.visit(
+        Visitor{
+            [&](Keywords::ContentBox const&) {
+                return metrics.contentBox();
+            },
+            [&](Keywords::BorderBox const&) {
+                return metrics.borderBox();
+            },
+            [&](Keywords::FillBox const&) {
+                return metrics.contentBox(); // TODO: handle SVG cases
+            },
+            [&](Keywords::StrokeBox const&) {
+                return metrics.borderBox(); // TODO: handle SVG cases
+            },
+            [&](Keywords::ViewBox const&) {
+                return metrics.borderBox(); // TODO: handle SVG cases
+            },
+        }
+    );
+}
+
+static Vec2Au _resolveTransformOrigin(RectAu referenceBox, TransformOrigin origin) {
+    Resolver resolver{};
+
+    auto x = origin.xOffset.visit(
+        Visitor{
+            [&](Keywords::Left) {
+                return referenceBox.start();
+            },
+            [&](Keywords::Right) {
+                return referenceBox.end();
+            },
+            [&](Keywords::Center) {
+                return referenceBox.center().x;
+            },
+            [&](CalcValue<PercentOr<Length>> value) {
+                return referenceBox.start() + resolver.resolve(value, referenceBox.width);
+            }
+        }
+    );
+
+    auto y = origin.yOffset.visit(
+        Visitor{
+            [&](Keywords::Top) {
+                return referenceBox.top();
+            },
+            [&](Keywords::Bottom) {
+                return referenceBox.bottom();
+            },
+            [&](Keywords::Center) {
+                return referenceBox.center().y;
+            },
+            [&](CalcValue<PercentOr<Length>> value) {
+                return referenceBox.top() + resolver.resolve(value, referenceBox.height);
+            }
+        }
+    );
+
+    return {x, y};
+}
+
+static Math::Trans2f _resolveTransform(RectAu referenceBox, Vec2Au origin, Slice<TransformFunction> transforms) {
+    auto result = Math::Trans2f::translate(
+        origin.cast<f64>()
+    );
+    Resolver resolver{};
+
+    for (auto const& transform : transforms) {
+        auto trans = transform.visit(
+            Visitor{
+                [&](MatrixTransform const& t) {
+                    return Math::Trans2f{
+                        resolver.resolve(t.values[0]),
+                        resolver.resolve(t.values[1]),
+                        resolver.resolve(t.values[2]),
+                        resolver.resolve(t.values[3]),
+                        resolver.resolve(t.values[4]),
+                        resolver.resolve(t.values[5]),
+                    };
+                },
+                [&](TranslateTransform const& t) {
+                    return Math::Trans2f::translate({
+                        resolver.resolve(t.x, referenceBox.width).cast<f64>(),
+                        resolver.resolve(t.y, referenceBox.height).cast<f64>(),
+                    });
+                },
+                [&](ScaleTransform const& t) {
+                    return Math::Trans2f::scale({
+                        resolver.resolve(t.x),
+                        resolver.resolve(t.y),
+                    });
+                },
+                [&](RotateTransform const& t) {
+                    return Math::Trans2f::rotate(resolver.resolve(t.value).value());
+                },
+                [&](SkewTransform const& t) {
+                    return Math::Trans2f::skew({
+                        Math::tan(resolver.resolve(t.x).value()),
+                        Math::tan(resolver.resolve(t.y).value()),
+                    });
+                },
+                [&](SkewXTransform const& t) {
+                    return Math::Trans2f::skew({
+                        Math::tan(resolver.resolve(t.value).value()),
+                        0,
+                    });
+                },
+                [&](SkewYTransform const& t) {
+                    return Math::Trans2f::skew({
+                        0,
+                        Math::tan(resolver.resolve(t.value).value()),
+                    });
+                }
+            }
+        );
+
+        result = trans.multiply(result);
+    }
+
+    return Math::Trans2f::translate(-origin.cast<f64>()).multiply(result);
+}
+
+static Rc<Scene::Node> _applyTransform(Frag const& frag, Rc<Scene::Node> content) {
+    auto const& transform = *frag.style().transform;
+    auto referenceBox = _resolveTransformReferenceBox(frag.metrics, transform.box);
+    auto origin = _resolveTransformOrigin(referenceBox, transform.origin);
+    auto const& transformFunctions = transform.transform.unwrap<Vec<TransformFunction>>();
+    auto trans = _resolveTransform(referenceBox, origin, transformFunctions);
+    return makeRc<Scene::Transform>(content, trans);
+}
+
+// MARK: Stacking Context ------------------------------------------------------
+
+static void _paintStackingContext(Frag& frag, Scene::Stack& stack) {
+    // 1. the background and borders of the element forming the stacking context.
+    _paintFrag(frag, stack);
+
+    // 2. the child stacking contexts with negative stack levels (most negative first).
+    _paintChildren(frag, stack, [](Style::SpecifiedValues const& s) -> bool {
+        return s.zIndex.unwrapOr<isize>(0) < 0;
+    });
+
+    // 3. the in-flow, non-inline-level, non-positioned descendants.
+    _paintChildren(frag, stack, [](Style::SpecifiedValues const& s) {
+        return s.zIndex == Keywords::AUTO and s.display != Display::INLINE and s.position == Position::STATIC;
+    });
+
+    // 4. the non-positioned floats.
+    _paintChildren(frag, stack, [](Style::SpecifiedValues const& s) {
+        return s.zIndex == Keywords::AUTO and s.position == Position::STATIC and s.float_ != Float::NONE;
+    });
+
+    // 5. the in-flow, inline-level, non-positioned descendants, including inline tables and inline blocks.
+    _paintChildren(frag, stack, [](Style::SpecifiedValues const& s) {
+        return s.zIndex == Keywords::AUTO and s.display == Display::INLINE and s.position == Position::STATIC;
+    });
+
+    // 6. the child stacking contexts with stack level 0 and the positioned descendants with stack level 0.
+    _paintChildren(frag, stack, [](Style::SpecifiedValues const& s) {
+        return s.zIndex.unwrapOr<isize>(0) == 0 and s.position != Position::STATIC;
+    });
+
+    // 7. the child stacking contexts with positive stack levels (least positive first).
+    _paintChildren(frag, stack, [](Style::SpecifiedValues const& s) {
+        return s.zIndex.unwrapOr<isize>(0) > 0;
+    });
+}
+
 static void _establishStackingContext(Frag& frag, Scene::Stack& stack) {
-    Rc<Scene::Stack> innerStack = frag.style().clip.has() ? _resolveClip(frag) : makeRc<Scene::Stack>();
+    Rc<Scene::Stack> innerStack = makeRc<Scene::Stack>();
     innerStack->zIndex = frag.style().zIndex.unwrapOr<isize>(0);
     _paintStackingContext(frag, *innerStack);
-    stack.add(std::move(innerStack));
+
+    Rc<Scene::Node> out = innerStack;
+    if (frag.style().clip.has())
+        out = _applyClip(frag, out);
+    if (frag.style().transform->has())
+        out = _applyTransform(frag, out);
+
+    stack.add(std::move(out));
 }
 
 export void paint(Frag& frag, Scene::Stack& stack) {
     _paintStackingContext(frag, stack);
 }
+
+// MARK: Wireframe -------------------------------------------------------------
 
 export void wireframe(Frag& frag, Gfx::Canvas& g) {
     for (auto& c : frag.children)
@@ -400,6 +553,8 @@ export void wireframe(Frag& frag, Gfx::Canvas& g) {
 
     g.stroke(frag.metrics.borderBox().cast<f64>());
 }
+
+// MARK: Overlay ---------------------------------------------------------------
 
 export void overlay(Frag& frag, Gfx::Canvas& g, Gc::Ref<Dom::Node> node) {
     if (frag.box->origin == node) {

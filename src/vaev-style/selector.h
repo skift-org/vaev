@@ -3,9 +3,8 @@
 #include <karm-base/box.h>
 #include <karm-base/vec.h>
 #include <karm-io/fmt.h>
+#include <vaev-css/parser.h>
 #include <vaev-dom/element.h>
-
-#include "css/parser.h"
 
 namespace Vaev::Style {
 
@@ -202,7 +201,6 @@ struct Pseudo {
 
     static Pseudo make(Str name) {
         auto id = _Type(name);
-        // logDebug("make type {} {}", name, id);
         if (id) {
             auto result = Type{*id};
             return result;

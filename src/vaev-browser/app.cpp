@@ -237,7 +237,7 @@ Ui::Child mainMenu([[maybe_unused]] State const& s) {
 Ui::Child addressMenu() {
     return Kr::contextMenuContent({
         Kr::contextMenuDock({
-            Ui::labelMedium("You are viewing a secure page") | Ui::insets(8),
+            Ui::labelMedium("Your are viewing a secure page") | Ui::insets(8),
             Kr::contextMenuIcon(Ui::SINK<>, Mdi::CLOSE),
         }),
     });

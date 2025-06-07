@@ -43,18 +43,20 @@ struct Page {
 };
 
 struct PageComputedStyle {
-    using Areas = Array<Rc<ComputedStyle>, toUnderlyingType(PageArea::_LEN)>;
+    using Areas = Array<Dom::PseudoElement, toUnderlyingType(PageArea::_LEN)>;
 
-    Rc<ComputedStyle> style;
+    Rc<SpecifiedValues> style;
     Areas _areas;
 
-    PageComputedStyle(ComputedStyle const& initial)
-        : style(makeRc<ComputedStyle>(initial)),
+    PageComputedStyle(SpecifiedValues const& initial)
+        : style(makeRc<SpecifiedValues>(initial)),
           _areas(Areas::fill([&](...) {
-              return makeRc<ComputedStyle>(initial);
+              Dom::PseudoElement pseudoElement;
+              pseudoElement._specifiedValues = makeRc<SpecifiedValues>(initial);
+              return pseudoElement;
           })) {}
 
-    Rc<ComputedStyle> area(PageArea margin) const {
+    Dom::PseudoElement& area(PageArea margin) {
         return _areas[toUnderlyingType(margin)];
     }
 };
@@ -92,7 +94,7 @@ struct PageAreaRule {
 
     static Opt<PageAreaRule> parse(Css::Sst const& sst);
 
-    void apply(ComputedStyle& c) const;
+    void apply(SpecifiedValues& c) const;
 
     void repr(Io::Emit& e) const;
 };

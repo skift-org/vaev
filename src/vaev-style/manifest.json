@@ -7,7 +7,7 @@
         "css"
     ],
     "requires": [
-        "vaev-base",
+        "vaev-values",
         "vaev-dom"
     ]
 }
