@@ -1,0 +1,5 @@
+{
+    "$schema": "https://schemas.cute.engineering/stable/cutekit.manifest.project.v1",
+    "id": "skift-org/vaev",
+    "type": "project"
+}
