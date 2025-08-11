@@ -1,14 +1,14 @@
-module;
-
-#include <karm-print/page.h>
-#include <vaev-dom/document.h>
-
 export module Vaev.View:dialog;
 
-import Vaev.Driver;
-import Karm.Kira;
-import Karm.Ui;
 import Hideo.Printers;
+import Karm.Core;
+import Karm.Gc;
+import Karm.Kira;
+import Karm.Print;
+import Karm.Ui;
+import Vaev.Engine;
+
+using namespace Karm;
 
 namespace Vaev::View {
 

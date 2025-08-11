@@ -1,24 +1,21 @@
 module;
 
-#include <karm-app/inputs.h>
-#include <karm-gc/heap.h>
-#include <karm-gc/root.h>
 #include <karm-gfx/colors.h>
 #include <karm-sys/async.h>
 #include <karm-sys/file.h>
 #include <karm-sys/launch.h>
 #include <karm-sys/time.h>
-#include <vaev-dom/document.h>
 
 export module Vaev.Browser:app;
 
 import Mdi;
 import Vaev.View;
-import Vaev.Driver;
-import Vaev.Loader;
+import Vaev.Engine;
 import Karm.Http;
 import Karm.Kira;
 import Karm.Ui;
+import Karm.Gc;
+import Karm.App;
 import :inspect;
 
 namespace Vaev::Browser {

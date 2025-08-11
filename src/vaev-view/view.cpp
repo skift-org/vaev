@@ -1,21 +1,22 @@
 module;
 
-#include <karm-gc/root.h>
 #include <karm-gfx/canvas.h>
-#include <vaev-dom/document.h>
-#include <vaev-style/media.h>
+#include <karm-math/au.h>
 
 export module Vaev.View:view;
 
-import Vaev.Driver;
-import Vaev.Layout;
+import Karm.Gc;
+import Karm.Print;
 import Karm.Ui;
+import Vaev.Engine;
+
+using namespace Karm;
 
 namespace Vaev::View {
 
 export struct ViewProps {
     bool wireframe = false;
-    Opt<Gc::Ref<Dom::Node>> selected = NONE;
+    Gc::Ptr<Dom::Node> selected = nullptr;
 };
 
 struct View : Ui::View<View> {
@@ -55,7 +56,7 @@ struct View : Ui::View<View> {
             .prefersReducedTransparency = ReducedTransparency::NO_PREFERENCE,
             .prefersContrast = Contrast::NO_PREFERENCE,
             .forcedColors = Colors::NONE,
-            .prefersColorScheme = Ui::DARK_MODE ? ColorScheme::DARK : ColorScheme::LIGHT,
+            .prefersColorScheme = Ui::darkMode ? ColorScheme::DARK : ColorScheme::LIGHT,
             .prefersReducedData = ReducedData::NO_PREFERENCE,
 
             // NOTE: Deprecated Media Features
@@ -92,7 +93,7 @@ struct View : Ui::View<View> {
             Layout::wireframe(*frag, g);
 
         if (_props.selected)
-            Layout::overlay(*frag, g, *_props.selected);
+            Layout::overlay(*frag, g, _props.selected.upgrade());
 
         g.pop();
     }
