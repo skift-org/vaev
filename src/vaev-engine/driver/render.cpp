@@ -2,15 +2,17 @@ module;
 
 #include <karm-logger/logger.h>
 #include <karm-math/au.h>
-#include <karm-font/database.h>
 
 export module Vaev.Engine:driver.render;
 
 import Karm.Gc;
 import Karm.Scene;
+import Karm.Font;
+import Karm.Gfx;
 import :layout;
 import :style;
-import :dom;
+import :dom.document;
+import :values;
 
 namespace Vaev::Driver {
 
@@ -22,7 +24,7 @@ export struct RenderResult {
 
 export RenderResult render(Gc::Ref<Dom::Document> dom, Style::Media const& media, Layout::Viewport viewport) {
     Font::Database db;
-    if (not db.loadAll())
+    if (not db.loadSystemFonts())
         logWarn("not all fonts were properly loaded into database");
 
     Style::Computer computer{media, *dom->styleSheets, db};
@@ -46,7 +48,6 @@ export RenderResult render(Gc::Ref<Dom::Document> dom, Style::Media const& media
     );
 
     auto sceneRoot = makeRc<Scene::Stack>();
-
     Layout::paint(root, *sceneRoot);
     sceneRoot->prepare();
 

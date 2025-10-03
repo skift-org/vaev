@@ -1,11 +1,12 @@
 module;
 
-#include <karm-gfx/color.h>
 #include <karm-math/au.h>
 
 export module Vaev.Engine:style.specified;
 
 import Karm.Core;
+import Karm.Gfx;
+
 import :css;
 import :values;
 
@@ -29,6 +30,8 @@ struct TransformProps {
 // https://www.w3.org/TR/css-cascade/#specified
 export struct SpecifiedValues {
     static SpecifiedValues const& initial();
+
+    SpecifiedValues() : fontFace(Gfx::Fontface::fallback()) {}
 
     Gfx::Color color;
     Number opacity;
@@ -78,7 +81,7 @@ export struct SpecifiedValues {
     Cow<FlexProps> flex;
     Cow<BreakProps> break_;
 
-    Cow<Map<String, Css::Content>> variables;
+    Cow<Map<Symbol, Css::Content>> variables;
 
     Float float_ = Float::NONE;
     Clear clear = Clear::NONE;
@@ -87,6 +90,10 @@ export struct SpecifiedValues {
     ZIndex zIndex = Keywords::AUTO;
 
     Cow<SVGProps> svg;
+
+    // ---------- Computed Style ---------------------
+
+    Rc<Gfx::Fontface> fontFace;
 
     void inherit(SpecifiedValues const& parent) {
         color = parent.color;
@@ -103,11 +110,15 @@ export struct SpecifiedValues {
     }
 
     void setCustomProp(Str varName, Css::Content value) {
+        setCustomProp(Symbol::from(varName), value);
+    }
+
+    void setCustomProp(Symbol varName, Css::Content value) {
         variables.cow().put(varName, value);
     }
 
     Css::Content getCustomProp(Str varName) const {
-        auto value = variables->access(varName);
+        auto value = variables->access(Symbol::from(varName));
         if (value)
             return *value;
         return {};

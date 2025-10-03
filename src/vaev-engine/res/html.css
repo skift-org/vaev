@@ -92,6 +92,48 @@ xmp {
 /* 15.3.4 MARK: Phrasing content -------------------------------------------- */
 /* https://html.spec.whatwg.org/multipage/rendering.html#phrasing-content-3   */
 
+cite,
+dfn,
+em,
+i,
+var {
+    font-style: italic;
+}
+
+b,
+strong {
+    font-weight: bolder;
+}
+
+code,
+kbd,
+samp,
+tt {
+    font-family: monospace;
+}
+
+big {
+    font-size: larger;
+}
+
+small {
+    font-size: smaller;
+}
+
+sub {
+    vertical-align: sub;
+}
+
+sup {
+    vertical-align: super;
+}
+
+sub,
+sup {
+    line-height: normal;
+    font-size: smaller;
+}
+
 :link {
     color: #0000EE;
 }
@@ -183,6 +225,10 @@ dd {
     margin-inline-start: 40px;
 }
 
+dir, menu, ol, ul {
+    padding-inline-start: 40px;
+}
+
 
 /* 15.3.8 MARK: Tables ------------------------------------------------------ */
 /* https://html.spec.whatwg.org/multipage/rendering.html#tables-2 */
@@ -245,6 +291,17 @@ button {
 input,
 button {
     display: inline-block;
+}
+
+/* 15.3.11 MARK: The hr element --------------------------------------------- */
+
+hr {
+    color: gray;
+    border-style: solid;
+    border-width: 1px;
+    margin-block: 0.5em;
+    margin-inline: auto;
+    overflow: hidden;
 }
 
 /* 16.0 MARK: Obsolete features --------------------------------------------- */

@@ -1,21 +1,16 @@
-module;
-
-#include <karm-gfx/colors.h>
-#include <karm-sys/async.h>
-#include <karm-sys/file.h>
-#include <karm-sys/launch.h>
-#include <karm-sys/time.h>
-
 export module Vaev.Browser:app;
 
 import Mdi;
-import Vaev.View;
-import Vaev.Engine;
+import Karm.App;
+import Karm.Gc;
 import Karm.Http;
 import Karm.Kira;
+import Karm.Ref;
+import Karm.Sys;
 import Karm.Ui;
-import Karm.Gc;
-import Karm.App;
+import Karm.Gfx;
+import Vaev.Engine;
+import Vaev.View;
 import :inspect;
 
 namespace Vaev::Browser {
@@ -27,8 +22,8 @@ enum struct SidePanel {
 };
 
 struct Navigate {
-    Mime::Url url;
-    Mime::Uti action = Mime::Uti::PUBLIC_OPEN;
+    Ref::Url url;
+    Ref::Uti action = Ref::Uti::PUBLIC_OPEN;
 };
 
 enum struct Status {
@@ -99,7 +94,7 @@ using Action = Union<
     NavigateLocation>;
 
 Async::_Task<Opt<Action>> navigateAsync(Gc::Heap& heap, Http::Client& client, Navigate nav) {
-    if (nav.action == Mime::Uti::PUBLIC_MODIFY) {
+    if (nav.action == Ref::Uti::PUBLIC_MODIFY) {
         co_return Loaded{co_await Vaev::Loader::viewSourceAsync(heap, client, nav.url)};
     } else {
         co_return Loaded{co_await Vaev::Loader::fetchDocumentAsync(heap, client, nav.url)};
@@ -155,7 +150,7 @@ Ui::Task<Action> reduce(State& s, Action a) {
             return NONE;
         },
         [&](NavigateLocation) -> Ui::Task<Action> {
-            return reduce(s, Navigate{Mime::Url::parse(s.location)});
+            return reduce(s, Navigate{Ref::Url::parse(s.location)});
         },
     });
 
@@ -182,7 +177,7 @@ Ui::Child openInDefaultBrowser(State const& s) {
             }
 
             auto res = Sys::launch({
-                .action = Mime::Uti::PUBLIC_OPEN,
+                .action = Ref::Uti::PUBLIC_OPEN,
                 .objects = {s.currentUrl().url},
             });
 
@@ -287,7 +282,7 @@ Ui::Child contextMenu(State const& s) {
         Kr::contextMenuItem(
             Model::bind<Navigate>(
                 s.currentUrl().url,
-                Mime::Uti::PUBLIC_MODIFY
+                Ref::Uti::PUBLIC_MODIFY
             ),
             Mdi::CODE_TAGS, "View Source..."
         ),
@@ -371,7 +366,7 @@ Ui::Child appContent(State const& s) {
     );
 }
 
-export Ui::Child app(Gc::Heap& heap, Http::Client& client, Mime::Url url, Res<Gc::Ref<Vaev::Dom::Document>> dom) {
+export Ui::Child app(Gc::Heap& heap, Http::Client& client, Ref::Url url, Res<Gc::Ref<Vaev::Dom::Document>> dom) {
     return Ui::reducer<Model>(
         {
             heap,

@@ -1,12 +1,12 @@
 module;
 
-#include <karm-gfx/borders.h>
 #include <karm-logger/logger.h>
-#include <karm-gfx/prose.h>
+#include <karm-math/au.h>
 
 module Vaev.Engine;
 
 import Karm.Image;
+import Karm.Gfx;
 import :values;
 import :layout.block;
 import :layout.flex;
@@ -59,6 +59,10 @@ Output _contentLayout(Tree& tree, Box& box, Input input, usize startAt, Opt<usiz
 }
 
 InsetsAu computeMargins(Tree& tree, Box& box, Input input) {
+    // Boxes that make up a table do not have margins.
+    if (box.style->display.isTableInternal())
+        return {};
+
     InsetsAu res;
     auto margin = box.style->margin;
 
@@ -70,26 +74,37 @@ InsetsAu computeMargins(Tree& tree, Box& box, Input input) {
     return res;
 }
 
+// https://www.w3.org/TR/css-values-4/#snap-a-length-as-a-border-width
+Au _snapLengthAsBorderWidth(Au v) {
+    if (v < 1_au)
+        return ceil(v);
+    return floor(v);
+}
+
 InsetsAu computeBorders(Tree& tree, Box& box) {
     InsetsAu res;
     auto borders = box.style->borders;
 
     if (borders->top.style != Gfx::BorderStyle::NONE)
-        res.top = resolve(tree, box, borders->top.width);
+        res.top = _snapLengthAsBorderWidth(resolve(tree, box, borders->top.width));
 
     if (borders->end.style != Gfx::BorderStyle::NONE)
-        res.end = resolve(tree, box, borders->end.width);
+        res.end = _snapLengthAsBorderWidth(resolve(tree, box, borders->end.width));
 
     if (borders->bottom.style != Gfx::BorderStyle::NONE)
-        res.bottom = resolve(tree, box, borders->bottom.width);
+        res.bottom = _snapLengthAsBorderWidth(resolve(tree, box, borders->bottom.width));
 
     if (borders->start.style != Gfx::BorderStyle::NONE)
-        res.start = resolve(tree, box, borders->start.width);
+        res.start = _snapLengthAsBorderWidth(resolve(tree, box, borders->start.width));
 
     return res;
 }
 
-static InsetsAu _computePaddings(Tree& tree, Box& box, Vec2Au containingBlock) {
+InsetsAu computePaddings(Tree& tree, Box& box, Vec2Au containingBlock) {
+    // In a table only table cell have padding
+    if (box.style->display.isTableInternal() and box.style->display != Display::TABLE_CELL)
+        return {};
+
     InsetsAu res;
     auto padding = box.style->padding;
 
@@ -101,7 +116,7 @@ static InsetsAu _computePaddings(Tree& tree, Box& box, Vec2Au containingBlock) {
     return res;
 }
 
-static Math::Radii<Au> _computeRadii(Tree& tree, Box& box, Vec2Au size) {
+Math::Radii<Au> computeRadii(Tree& tree, Box& box, Vec2Au size) {
     auto radii = box.style->borders->radii;
     Math::Radii<Au> res;
 
@@ -123,7 +138,7 @@ Vec2Au computeIntrinsicSize(Tree& tree, Box& box, IntrinsicSize intrinsic, Vec2A
     }
 
     auto borders = computeBorders(tree, box);
-    auto padding = _computePaddings(tree, box, containingBlock);
+    auto padding = computePaddings(tree, box, containingBlock);
 
     auto output = _contentLayout(
         tree,
@@ -138,7 +153,7 @@ Vec2Au computeIntrinsicSize(Tree& tree, Box& box, IntrinsicSize intrinsic, Vec2A
     return output.size + padding.all() + borders.all();
 }
 
-static Opt<Au> _computeSpecifiedSize(Tree& tree, Box& box, Size size, Vec2Au containingBlock, bool isWidth) {
+Opt<Au> computeSpecifiedSize(Tree& tree, Box& box, Size size, Vec2Au containingBlock, bool isWidth) {
     if (size.is<Keywords::MinContent>()) {
         auto intrinsicSize = computeIntrinsicSize(tree, box, IntrinsicSize::MIN_CONTENT, containingBlock);
         return isWidth ? Opt<Au>{intrinsicSize.x} : Opt<Au>{NONE};
@@ -202,12 +217,12 @@ void fillKnownSizeWithSpecifiedSizeIfEmpty(Tree& tree, Box& box, Input& input) {
     auto sizing = box.style->sizing;
 
     if (input.knownSize.width == NONE) {
-        auto specifiedWidth = _computeSpecifiedSize(tree, box, sizing->width, input.containingBlock, true);
+        auto specifiedWidth = computeSpecifiedSize(tree, box, sizing->width, input.containingBlock, true);
         input.knownSize.width = specifiedWidth;
     }
 
     if (input.knownSize.height == NONE) {
-        auto specifiedHeight = _computeSpecifiedSize(tree, box, sizing->height, input.containingBlock, false);
+        auto specifiedHeight = computeSpecifiedSize(tree, box, sizing->height, input.containingBlock, false);
         input.knownSize.height = specifiedHeight;
     }
 }
@@ -218,7 +233,7 @@ Output layout(Tree& tree, Box& box, Input input) {
     fillKnownSizeWithSpecifiedSizeIfEmpty(tree, box, input);
 
     auto borders = computeBorders(tree, box);
-    auto padding = _computePaddings(tree, box, input.containingBlock);
+    auto padding = computePaddings(tree, box, input.containingBlock);
 
     input.knownSize.width = input.knownSize.width.map([&](auto s) {
         return max(0_au, s - padding.horizontal() - borders.horizontal());
@@ -310,7 +325,7 @@ Output layout(Tree& tree, Box& box, Input input) {
             currFrag.metrics.borderSize = size;
             currFrag.metrics.padding = padding;
             currFrag.metrics.borders = borders;
-            currFrag.metrics.radii = _computeRadii(tree, box, size);
+            currFrag.metrics.radii = computeRadii(tree, box, size);
             currFrag.metrics.outlineOffset = resolve(tree, box, box.style->outline->offset);
             currFrag.metrics.outlineWidth = resolve(tree, box, box.style->outline->width);
 

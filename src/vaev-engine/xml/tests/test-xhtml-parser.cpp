@@ -1,6 +1,7 @@
 #include <karm-test/macros.h>
 
 import Karm.Gc;
+import Karm.Ref;
 import Vaev.Engine;
 
 using namespace Karm;
@@ -218,7 +219,7 @@ test$("parse-doctype") {
 
     auto s = Io::SScan("<!DOCTYPE html><html></html>");
 
-    auto dom = gc.alloc<Dom::Document>(Mime::Url());
+    auto dom = gc.alloc<Dom::Document>(Ref::Url());
     try$(p.parse(s, Html::NAMESPACE, *dom));
     expect$(dom->hasChildren());
 
@@ -234,7 +235,7 @@ test$("parse-title") {
     Xml::XmlParser p{gc};
 
     auto s = Io::SScan("<title>the title</title>");
-    auto dom = gc.alloc<Dom::Document>(Mime::Url());
+    auto dom = gc.alloc<Dom::Document>(Ref::Url());
     try$(p.parse(s, Html::NAMESPACE, *dom));
     expect$(dom->title() == "the title");
     return Ok();
@@ -248,7 +249,7 @@ test$("parse-comment-with-gt-symb") {
         "<title>im a title!</title>"
         "<!-- a b <meta> c d -->"
     );
-    auto dom = gc.alloc<Dom::Document>(Mime::Url());
+    auto dom = gc.alloc<Dom::Document>(Ref::Url());
     try$(p.parse(s, Html::NAMESPACE, *dom));
 
     expect$(dom->hasChildren());
@@ -271,7 +272,7 @@ test$("parse-xml-decl") {
     Xml::XmlParser p{gc};
 
     auto s = Io::SScan("<?xml version='1.0' encoding='UTF-8'?><html></html>");
-    auto dom = gc.alloc<Dom::Document>(Mime::Url());
+    auto dom = gc.alloc<Dom::Document>(Ref::Url());
     try$(p.parse(s, Html::NAMESPACE, *dom));
     expect$(dom->xmlVersion == "1.0");
     expect$(dom->xmlEncoding == "UTF-8");
@@ -288,7 +289,7 @@ test$("parse-xml-different-namespace") {
         "<rect/>"
         "</svg>"
     );
-    auto dom = gc.alloc<Dom::Document>(Mime::Url());
+    auto dom = gc.alloc<Dom::Document>(Ref::Url());
     try$(p.parse(s, Html::NAMESPACE, *dom));
 
     auto svg = dom->firstChild()->is<Element>();

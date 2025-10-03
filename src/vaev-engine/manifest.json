@@ -23,7 +23,8 @@
         "karm-image",
         "karm-logger",
         "karm-math",
-        "karm-mime",
+        "karm-md",
+        "karm-ref",
         "karm-print",
         "karm-scene",
         "karm-font"

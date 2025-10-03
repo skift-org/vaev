@@ -1,9 +1,11 @@
 #include <karm-test/macros.h>
-#include <karm-gfx/prose.h>
+#include <karm-math/au.h>
 
 import Vaev.Engine;
 import Karm.Gc;
+import Karm.Ref;
 import Karm.Print;
+import Karm.Gfx;
 
 using namespace Karm;
 
@@ -167,7 +169,7 @@ bool FakeInlineBox::matches(InlineBox const& inlineBox) {
 test$("empty-body") {
     Gc::Heap gc;
 
-    auto dom = gc.alloc<Dom::Document>(Mime::Url());
+    auto dom = gc.alloc<Dom::Document>(Ref::Url());
     buildHtmlTestCase(gc, dom, "<body/>");
 
     auto expectedBodySubtree =
@@ -186,7 +188,7 @@ test$("empty-body") {
 test$("no span") {
     Gc::Heap gc;
 
-    auto dom = gc.alloc<Dom::Document>(Mime::Url());
+    auto dom = gc.alloc<Dom::Document>(Ref::Url());
     buildHtmlTestCase(gc, dom, "<body>hello, world</body>");
 
     auto expectedBodySubtree =
@@ -208,7 +210,7 @@ test$("no span") {
 test$("no span") {
     Gc::Heap gc;
 
-    auto dom = gc.alloc<Dom::Document>(Mime::Url());
+    auto dom = gc.alloc<Dom::Document>(Ref::Url());
     buildHtmlTestCase(gc, dom, "<body>hello,<br>brrrrr world</body>");
 
     auto expectedBodySubtree =
@@ -241,7 +243,7 @@ test$("no span") {
 test$("no span, breaking block") {
     Gc::Heap gc;
 
-    auto dom = gc.alloc<Dom::Document>(Mime::Url());
+    auto dom = gc.alloc<Dom::Document>(Ref::Url());
     buildHtmlTestCase(gc, dom, "<body>hello, <div>cruel</div> world</body>");
 
     auto expectedBodySubtree =
@@ -278,7 +280,7 @@ test$("no span, breaking block") {
 test$("span and breaking block 1") {
     Gc::Heap gc;
 
-    auto dom = gc.alloc<Dom::Document>(Mime::Url());
+    auto dom = gc.alloc<Dom::Document>(Ref::Url());
     buildHtmlTestCase(gc, dom, "<body>"
                                "<span>hello"
                                "<span>cruel"
@@ -351,7 +353,7 @@ test$("span and breaking block 1") {
 test$("span and breaking block 2") {
     Gc::Heap gc;
 
-    auto dom = gc.alloc<Dom::Document>(Mime::Url());
+    auto dom = gc.alloc<Dom::Document>(Ref::Url());
     buildHtmlTestCase(gc, dom, "<body>"
                                "<span>hello"
                                "<span>cruel"
@@ -443,7 +445,7 @@ test$("span and breaking block 2") {
 test$("inline-block") {
     Gc::Heap gc;
 
-    auto dom = gc.alloc<Dom::Document>(Mime::Url());
+    auto dom = gc.alloc<Dom::Document>(Ref::Url());
     buildHtmlTestCase(gc, dom, "<body>"
                                "   A <span>X</span>"
                                "   <div id=\"banana\" style=\"display:inline-block\">"
@@ -495,7 +497,7 @@ test$("inline-block") {
 test$("flex-blockify") {
     Gc::Heap gc;
 
-    auto dom = gc.alloc<Dom::Document>(Mime::Url());
+    auto dom = gc.alloc<Dom::Document>(Ref::Url());
     buildHtmlTestCase(
         gc,
         dom,
@@ -546,7 +548,7 @@ test$("flex-blockify") {
 test$("table-fixup") {
     Gc::Heap gc;
 
-    auto dom = gc.alloc<Dom::Document>(Mime::Url());
+    auto dom = gc.alloc<Dom::Document>(Ref::Url());
     dom->styleSheets = gc.alloc<Style::StyleSheetList>();
 
     Io::SScan scan{

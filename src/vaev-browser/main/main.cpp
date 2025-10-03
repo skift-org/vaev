@@ -1,18 +1,21 @@
 #include <karm-sys/entry.h>
-#include <karm-sys/proc.h>
 
 import Karm.Ui;
 import Vaev.Browser;
 import Vaev.Engine;
 import Karm.Http;
 import Karm.Gc;
+import Karm.Sys;
+import Karm.Debug;
 
 using namespace Karm;
 
 Async::Task<> entryPointAsync(Sys::Context& ctx) {
+    co_try$(Debug::toggleFlag(Debug::FEATURE, "*", true));
+
     auto args = Sys::useArgs(ctx);
     auto url = args.len()
-                   ? Mime::parseUrlOrPath(args[0], co_try$(Sys::pwd()))
+                   ? Ref::parseUrlOrPath(args[0], co_try$(Sys::pwd()))
                    : "about:start"_url;
     Gc::Heap heap;
     auto client = Http::defaultClient();

@@ -1,15 +1,13 @@
 module;
 
-#include <karm-gfx/borders.h>
-#include <karm-gfx/colors.h>
 #include <karm-math/au.h>
 #include <karm-math/insets.h>
-#include <karm-mime/url.h>
-#include <karm-gfx/font.h>
 
 export module Vaev.Engine:style.props;
 
 import Karm.Core;
+import Karm.Ref;
+import Karm.Gfx;
 
 import :values;
 import :css;
@@ -2537,6 +2535,48 @@ export struct PaddingLeftProp {
     }
 };
 
+export struct PaddingInlineStart {
+    CalcValue<PercentOr<Length>> value = initial();
+
+    static Str name() { return "padding-inline-start"; }
+
+    static Length initial() { return Length{}; }
+
+    void apply(SpecifiedValues& c) const {
+        c.padding.cow().start = value;
+    }
+
+    static CalcValue<PercentOr<Length>> load(SpecifiedValues const& c) {
+        return c.padding->start;
+    }
+
+    Res<> parse(Cursor<Css::Sst>& c) {
+        value = try$(parseValue<CalcValue<PercentOr<Length>>>(c));
+        return Ok();
+    }
+};
+
+export struct PaddingInlineEnd {
+    CalcValue<PercentOr<Length>> value = initial();
+
+    static Str name() { return "padding-inline-end"; }
+
+    static Length initial() { return Length{}; }
+
+    void apply(SpecifiedValues& c) const {
+        c.padding.cow().end = value;
+    }
+
+    static CalcValue<PercentOr<Length>> load(SpecifiedValues const& c) {
+        return c.padding->end;
+    }
+
+    Res<> parse(Cursor<Css::Sst>& c) {
+        value = try$(parseValue<CalcValue<PercentOr<Length>>>(c));
+        return Ok();
+    }
+};
+
 export struct PaddingProp {
     Math::Insets<CalcValue<PercentOr<Length>>> value = initial();
 
@@ -3383,10 +3423,10 @@ export struct StrokeWidthProp {
 // https://drafts.csswg.org/css-variables/#defining-variables
 // this symbolizes a custom property, it starts with `--` and can be used to store a value that can be reused in the stylesheet
 export struct CustomProp {
-    String varName;
+    Symbol varName;
     Css::Content value;
 
-    CustomProp(String varName, Css::Content value)
+    CustomProp(Symbol varName, Css::Content value)
         : varName(varName), value(value) {
     }
 
@@ -3404,21 +3444,21 @@ export struct CustomProp {
 // NOTE: A property that could not be parsed, it's used to store the value
 //       as-is and apply it with the cascade and custom properties
 export struct DeferredProp {
-    String propName;
+    Symbol propName;
     Css::Content value;
 
     static constexpr Str name() { return "deferred prop"; }
 
-    static bool _expandVariable(Cursor<Css::Sst>& c, Map<String, Css::Content> const& env, Css::Content& out);
+    static bool _expandVariable(Cursor<Css::Sst>& c, Map<Symbol, Css::Content> const& env, Css::Content& out);
 
-    static bool _expandFunction(Cursor<Css::Sst>& c, Map<String, Css::Content> const& env, Css::Content& out);
+    static bool _expandFunction(Cursor<Css::Sst>& c, Map<Symbol, Css::Content> const& env, Css::Content& out);
 
-    static void _expandContent(Cursor<Css::Sst>& c, Map<String, Css::Content> const& env, Css::Content& out);
+    static void _expandContent(Cursor<Css::Sst>& c, Map<Symbol, Css::Content> const& env, Css::Content& out);
 
     void apply(SpecifiedValues const& parent, SpecifiedValues& c) const;
 
     void repr(Io::Emit& e) const {
-        e("(Deffered {#} = {})", propName, value);
+        e("(deferred {#} = {})", propName, value);
     }
 };
 
@@ -3588,6 +3628,8 @@ using _StyleProp = Union<
     PaddingRightProp,
     PaddingBottomProp,
     PaddingLeftProp,
+    PaddingInlineStart,
+    PaddingInlineEnd,
     PaddingProp,
 
     // Positioning

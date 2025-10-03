@@ -6,13 +6,16 @@ export module Vaev.Engine:html.parser;
 
 import Karm.Gc;
 import Karm.Debug;
-import :dom;
+import :dom.document;
+import :dom.documentType;
+import :dom.element;
+import :dom.comment;
 import :html.token;
 import :html.lexer;
 
 namespace Vaev::Html {
 
-static Debug::Flag debugParser{"web-html-parser"s};
+static auto debugParser = Debug::Flag::debug("web-html-parser"s, "Log HTML parser state transitions"s);
 
 #define FOREACH_INSERTION_MODE(MODE) \
     MODE(INITIAL)                    \
@@ -110,6 +113,7 @@ export struct HtmlParser : HtmlSink {
         static Array const SPECIAL{
 #define SPECIAL(NAME) NAME,
 #include "defs/special.inc"
+
 #undef SPECIAL
         };
         return contains(SPECIAL, name);

@@ -1,14 +1,16 @@
 module;
 
-#include <karm-gfx/font.h>
-#include <karm-gfx/prose.h>
 #include <karm-math/trans.h>
+#include <karm-math/au.h>
 
 export module Vaev.Engine:layout.base;
 
 import Karm.Image;
 import Karm.Gc;
+import Karm.Gfx;
+
 import :style;
+import :dom.element;
 import :layout.svg;
 
 namespace Vaev::Layout {
@@ -340,7 +342,7 @@ export using Content = Union<
     None,
     Vec<Box>,
     InlineBox,
-    Karm::Image::Picture,
+    Rc<Gfx::Surface>,
     SVGRoot>;
 
 export struct Attrs {
@@ -355,17 +357,16 @@ export struct Attrs {
 
 struct Box : Meta::NoCopy {
     Rc<Style::SpecifiedValues> style;
-    Rc<Gfx::Fontface> fontFace;
     Content content = NONE;
     Attrs attrs;
     Opt<Rc<FormatingContext>> formatingContext = NONE;
     Gc::Ptr<Dom::Element> origin;
 
-    Box(Rc<Style::SpecifiedValues> style, Rc<Gfx::Fontface> font, Gc::Ptr<Dom::Element> og)
-        : style{std::move(style)}, fontFace{font}, origin{og} {}
+    Box(Rc<Style::SpecifiedValues> style, Gc::Ptr<Dom::Element> og)
+        : style{std::move(style)}, origin{og} {}
 
-    Box(Rc<Style::SpecifiedValues> style, Rc<Gfx::Fontface> font, Content content, Gc::Ptr<Dom::Element> og)
-        : style{std::move(style)}, fontFace{font}, content{std::move(content)}, origin{og} {}
+    Box(Rc<Style::SpecifiedValues> style, Content content, Gc::Ptr<Dom::Element> og)
+        : style{std::move(style)}, content{std::move(content)}, origin{og} {}
 
     Slice<Box> children() const {
         if (auto children = content.is<Vec<Box>>())
@@ -390,7 +391,7 @@ struct Box : Meta::NoCopy {
     }
 
     bool isReplaced() {
-        return content.is<Karm::Image::Picture>() or content.is<SVGRoot>();
+        return content.is<Rc<Gfx::Surface>>() or content.is<SVGRoot>();
     }
 
     void repr(Io::Emit& e) const {

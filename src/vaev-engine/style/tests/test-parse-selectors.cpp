@@ -243,6 +243,88 @@ test$("vaev-style-parse-mixed-selectors") {
     return Ok();
 }
 
+test$("vaev-style-parse-anb") {
+    expectEq$(
+        try$(AnB::parse("odd")),
+        AnB(2, 1)
+    );
+
+    expectEq$(
+        try$(AnB::parse("even")),
+        AnB(2, 0)
+    );
+
+    expectEq$(
+        try$(AnB::parse("4")),
+        AnB(0, 4)
+    );
+
+    expectEq$(
+        try$(AnB::parse("-n")),
+        AnB(-1, 0)
+    );
+
+    expectEq$(
+        try$(AnB::parse("n")),
+        AnB(1, 0)
+    );
+
+    expectEq$(
+        try$(AnB::parse("3n")),
+        AnB(3, 0)
+    );
+
+    expectEq$(
+        try$(AnB::parse("2n+5")),
+        AnB(2, 5)
+    );
+
+    expectEq$(
+        try$(AnB::parse("2n + 5")),
+        AnB(2, 5)
+    );
+
+    expectEq$(
+        try$(AnB::parse("2n +5")),
+        AnB(2, 5)
+    );
+
+    expectEq$(
+        try$(AnB::parse("2n -5")),
+        AnB(2, -5)
+    );
+
+    expectEq$(
+        try$(AnB::parse("2n-5")),
+        AnB(2, -5)
+    );
+
+    expectEq$(
+        try$(AnB::parse("n-5")),
+        AnB(1, -5)
+    );
+
+    expectEq$(
+        try$(AnB::parse("n- 5")),
+        AnB(1, -5)
+    );
+
+    expectEq$(
+        try$(AnB::parse("n+ 5")),
+        AnB(1, 5)
+    );
+
+    expectNot$(AnB::parse("n+"));
+    expectNot$(AnB::parse("n+-5"));
+    expectNot$(AnB::parse("n- +5"));
+    expectNot$(AnB::parse("n-+ 5"));
+    expectNot$(AnB::parse("n -+5"));
+    expectNot$(AnB::parse("+ n"));
+    expectNot$(AnB::parse("+ n -3"));
+
+    return Ok();
+}
+
 test$("vaev-style-parse-pseudo-selectors") {
     expectEq$(
         Pseudo{Pseudo::ROOT},
@@ -263,6 +345,39 @@ test$("vaev-style-parse-pseudo-selectors") {
         try$(Selector::parse(":first-child")),
         Pseudo{Pseudo::FIRST_CHILD}
     );
+
+    expectEq$(
+        try$(Selector::parse(":nth-child(odd)")),
+        Pseudo(Pseudo::Type::NTH_CHILD, Pseudo::AnBofS{AnB(2, 1), NONE})
+    );
+
+    expectEq$(
+        try$(Selector::parse(":nth-child(odd of .class)")),
+        Pseudo(Pseudo::Type::NTH_CHILD, Pseudo::AnBofS{AnB(2, 1), ClassSelector{"class"s}})
+    );
+
+    expectEq$(
+        try$(Selector::parse(":nth-last-child(even)")),
+        Pseudo(Pseudo::Type::NTH_LAST_CHILD, Pseudo::AnBofS{AnB(2, 0), NONE})
+    );
+
+    expectEq$(
+        try$(Selector::parse(":nth-last-child(even of #id)")),
+        Pseudo(Pseudo::Type::NTH_LAST_CHILD, Pseudo::AnBofS{AnB(2, 0), IdSelector{"id"_sym}})
+    );
+
+    expectEq$(
+        try$(Selector::parse(":nth-of-type(3n+1)")),
+        Pseudo(Pseudo::Type::NTH_OF_TYPE, Pseudo::AnBofS{AnB(3, 1), NONE})
+    );
+
+    expectEq$(
+        try$(Selector::parse(":nth-last-of-type(3n+1)")),
+        Pseudo(Pseudo::Type::NTH_LAST_OF_TYPE, Pseudo::AnBofS{AnB(3, 1), NONE})
+    );
+
+    expectNot$(Selector::parse(":nth-of-type(3n+1 of .class)"));
+    expectNot$(Selector::parse(":nth-last-of-type(3n+1 of .class)"));
 
     expectEq$(
         try$(Selector::parse(":last-child")),

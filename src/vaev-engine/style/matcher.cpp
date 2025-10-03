@@ -6,14 +6,16 @@ export module Vaev.Engine:style.matcher;
 
 import Karm.Core;
 import Karm.Gc;
-import :dom;
+import Karm.Debug;
+import :dom.element;
 import :style.selector;
 
 using namespace Karm;
 
 namespace Vaev::Style {
 
-static constexpr bool DEBUG_MATCHING = false;
+static auto debugMatching = Debug::Flag::debug("web-style-matching", "Log failures to match selectors");
+static auto featureNthChild = Debug::Flag::feature("web-style-nth_child", "Enable :nth-child() and related selectors");
 
 static bool _matchSelector(Selector const& selector, Gc::Ref<Dom::Element> el);
 export Opt<Spec> matchSelector(Selector const& selector, Gc::Ref<Dom::Element> el);
@@ -84,7 +86,7 @@ static bool _match(Infix const& s, Gc::Ref<Dom::Element> e) {
         return _matchSubsequent(*s.lhs, e);
 
     default:
-        logWarnIf(DEBUG_MATCHING, "unimplemented selector: {}", s);
+        logWarnIf(debugMatching, "unimplemented selector: {}", s);
         return false;
     }
 }
@@ -115,7 +117,7 @@ static bool _match(Nfix const& s, Gc::Ref<Dom::Element> el) {
         return not _matchSelector(s.inners[0], el);
 
     default:
-        logWarnIf(DEBUG_MATCHING, "unimplemented selector: {}", s);
+        logWarnIf(debugMatching, "unimplemented selector: {}", s);
         return false;
     }
 }
@@ -222,66 +224,60 @@ static bool _matchLink(Gc::Ref<Dom::Element> el) {
     return el->qualifiedName == Html::A_TAG and el->hasAttribute(Html::HREF_ATTR);
 }
 
+// 14.3.1. :nth-child() pseudo-class
+// 14.3.2. :nth-last-child() pseudo-class
 // 14.3.3. :first-child pseudo-class
-// https://www.w3.org/TR/selectors-4/#the-first-child-pseudo
-
-static bool _matchFirstChild(Gc::Ref<Dom::Element> e) {
-    Gc::Ptr<Dom::Node> curr = e;
-    while (curr->hasPreviousSibling()) {
-        auto prev = curr->previousSibling();
-        if (auto el = prev->is<Dom::Element>())
-            return false;
-        curr = prev;
-    }
-    return true;
-}
-
 // 14.3.4. :last-child pseudo-class
+// https://www.w3.org/TR/selectors-4/#the-nth-child-pseudo
+// https://www.w3.org/TR/selectors-4/#the-nth-last-child-pseudo
+// https://www.w3.org/TR/selectors-4/#the-first-child-pseudo
 // https://www.w3.org/TR/selectors-4/#the-last-child-pseudo
+static bool _matchNthChild(Gc::Ref<Dom::Element> e, Pseudo::AnBofS const& anbOfS, bool isLast) {
+    if (not featureNthChild.enabled)
+        return false;
 
-static bool _matchLastChild(Gc::Ref<Dom::Element> e) {
-    Gc::Ptr<Dom::Node> curr = e;
-    while (curr->hasNextSibling()) {
-        auto next = curr->nextSibling();
-        if (auto el = next->is<Dom::Element>())
+    auto [anb, ofS] = anbOfS;
+    if (ofS) {
+        if (not matchSelector(*(ofS.unwrap()), *e))
             return false;
-        curr = next;
+
+        auto filterFunc = [&](Gc::Ptr<Dom::Node> node) {
+            auto el = node->is<Dom::Element>();
+            return el ? matchSelector(*(ofS.unwrap()), *el) != NONE : false;
+        };
+        auto index = isLast ? e->reverseIndex(filterFunc) : e->index(filterFunc);
+        return anb.match(index + 1);
+    } else {
+        auto filterFunc = [&](Gc::Ptr<Dom::Node> node) {
+            return node->is<Dom::Element>() != NONE;
+        };
+        auto index = isLast ? e->reverseIndex(filterFunc) : e->index(filterFunc);
+        return anb.match(index + 1);
     }
-    return true;
 }
 
+// 14.4.1. :nth-of-type pseudo-class
+// 14.4.2. :nth-last-of-type pseudo-class
 // 14.4.3. :first-of-type pseudo-class
-// https://www.w3.org/TR/selectors-4/#the-first-of-type-pseudo
-
-static bool _matchFirstOfType(Gc::Ref<Dom::Element> e) {
-    Gc::Ptr<Dom::Node> curr = e;
-    auto name = e->qualifiedName;
-
-    while (curr->hasPreviousSibling()) {
-        auto prev = curr->previousSibling();
-        if (auto el = prev->is<Dom::Element>())
-            if (e->qualifiedName == name)
-                return false;
-        curr = prev;
-    }
-    return true;
-}
-
 // 14.4.4. :last-of-type pseudo-class
+// https://www.w3.org/TR/selectors-4/#the-nth-of-type-pseudo
+// https://www.w3.org/TR/selectors-4/#the-nth-last-of-type-pseudo
+// https://www.w3.org/TR/selectors-4/#the-first-of-type-pseudo
 // https://www.w3.org/TR/selectors-4/#the-last-of-type-pseudo
+static bool _matchNthOfType(Gc::Ref<Dom::Element> e, AnB const& anb, bool isLast) {
+    if (not featureNthChild.enabled)
+        return false;
 
-static bool _matchLastOfType(Gc::Ref<Dom::Element> e) {
     Gc::Ptr<Dom::Node> curr = e;
     auto name = e->qualifiedName;
 
-    while (curr->hasNextSibling()) {
-        auto prev = curr->nextSibling();
-        if (auto el = prev->is<Dom::Element>())
-            if (e->qualifiedName == name)
-                return false;
-        curr = prev;
-    }
-    return true;
+    auto filterFunc = [&](Gc::Ptr<Dom::Node> node) {
+        auto el = node->is<Dom::Element>();
+        return el ? el->qualifiedName == name : false;
+    };
+
+    auto index = isLast ? e->reverseIndex(filterFunc) : e->index(filterFunc);
+    return anb.match(index + 1);
 }
 
 static bool _match(Pseudo const& s, Gc::Ref<Dom::Element> el) {
@@ -293,19 +289,31 @@ static bool _match(Pseudo const& s, Gc::Ref<Dom::Element> el) {
         return el->qualifiedName == Html::HTML_TAG;
 
     case Pseudo::FIRST_OF_TYPE:
-        return _matchFirstOfType(el);
+        return _matchNthOfType(el, AnB{0, 1}, false);
 
     case Pseudo::LAST_OF_TYPE:
-        return _matchLastOfType(el);
+        return _matchNthOfType(el, AnB{0, 1}, true);
 
     case Pseudo::FIRST_CHILD:
-        return _matchFirstChild(el);
+        return _matchNthChild(el, Pseudo::AnBofS{AnB{0, 1}, NONE}, false);
 
     case Pseudo::LAST_CHILD:
-        return _matchLastChild(el);
+        return _matchNthChild(el, Pseudo::AnBofS{AnB{0, 1}, NONE}, true);
+
+    case Pseudo::NTH_CHILD:
+        return _matchNthChild(el, s.extra.unwrap<Pseudo::AnBofS>("unexpected missing AnB"), false);
+
+    case Pseudo::NTH_LAST_CHILD:
+        return _matchNthChild(el, s.extra.unwrap<Pseudo::AnBofS>("unexpected missing AnB"), true);
+
+    case Pseudo::NTH_OF_TYPE:
+        return _matchNthOfType(el, s.extra.unwrap<Pseudo::AnBofS>("unexpected missing AnB").v0, false);
+
+    case Pseudo::NTH_LAST_OF_TYPE:
+        return _matchNthOfType(el, s.extra.unwrap<Pseudo::AnBofS>("unexpected missing AnB").v0, true);
 
     default:
-        logDebugIf(DEBUG_MATCHING, "unimplemented pseudo class: {}", s);
+        logDebugIf(debugMatching, "unimplemented pseudo class: {}", s);
         return false;
     }
 }
@@ -318,7 +326,7 @@ static bool _matchSelector(Selector const& selector, Gc::Ref<Dom::Element> el) {
         if constexpr (requires { _match(s, el); })
             return _match(s, el);
 
-        logWarnIf(DEBUG_MATCHING, "unimplemented selector: {}", s);
+        logWarnIf(debugMatching, "unimplemented selector: {}", s);
         return false;
     }});
 }

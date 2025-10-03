@@ -1,18 +1,17 @@
 module;
 
-#include <karm-gfx/borders.h>
-#include <karm-gfx/color.h>
-#include <karm-gfx/outline.h>
 #include <karm-math/au.h>
-#include <karm-math/vec.h>
+#include <karm-math/path.h>
+#include <karm-math/trans.h>
 
 export module Vaev.Engine:layout.svg;
 
 import Karm.Core;
 import Karm.Scene;
+import Karm.Gfx;
 
 import :style;
-import :dom;
+import :dom.names;
 import :values;
 
 using namespace Karm;
@@ -278,9 +277,10 @@ struct ShapeFrag : Frag {
             return fill.withOpacity(box->style->svg->fillOpacity);
         });
         Opt<Gfx::Color> resolvedStrokeColor = Vaev::Layout::resolve(box->style->svg->stroke, currentColor);
-        Opt<Gfx::Stroke> resolvedStroke = resolvedStrokeColor
-                                              ? Opt<Gfx::Stroke>{{*resolvedStrokeColor, (f64)strokeWidth}}
-                                              : NONE;
+        Opt<Gfx::Stroke> resolvedStroke =
+            resolvedStrokeColor
+                ? Opt<Gfx::Stroke>{{*resolvedStrokeColor, (f64)strokeWidth}}
+                : NONE;
 
         if (auto rect = shape.is<Rectangle<Au>>()) {
             return rectToSceneNode(rect->cast<f64>(), resolvedFill, resolvedStrokeColor, (f64)strokeWidth);

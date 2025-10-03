@@ -1,10 +1,11 @@
 module;
 
 #include <karm-core/macros.h>
-#include <karm-mime/url.h>
-#include <karm-gfx/font.h>
 
 export module Vaev.Engine:values.font;
+
+import Karm.Ref;
+import Karm.Gfx;
 
 import :css;
 import :values.base;
@@ -394,10 +395,10 @@ struct FontFamily {
 };
 
 export struct FontSource {
-    Union<Mime::Url, FontFamily> identifier;
+    Union<Ref::Url, FontFamily> identifier;
     Opt<String> format;
 
-    FontSource(Mime::Url url) : identifier(url) {}
+    FontSource(Ref::Url url) : identifier(url) {}
 
     FontSource(FontFamily family) : identifier(family) {}
 

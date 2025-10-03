@@ -3,9 +3,6 @@ module;
 #include <karm-logger/logger.h>
 #include <karm-math/au.h>
 #include <karm-math/trans.h>
-#include <karm-sys/time.h>
-#include <karm-gfx/colors.h>
-#include <karm-font/database.h>
 
 export module Vaev.Engine:driver.print;
 
@@ -13,11 +10,14 @@ import Karm.Core;
 import Karm.Gc;
 import Karm.Print;
 import Karm.Scene;
+import Karm.Font;
+import Karm.Sys;
+import Karm.Gfx;
 
 import :style;
 import :layout;
 import :values;
-import :dom;
+import :dom.document;
 import :css;
 
 using namespace Karm;
@@ -88,50 +88,11 @@ void _paintMargins(Style::PageSpecifiedValues& pageStyle, RectAu pageRect, RectA
     _paintMainMargin(pageStyle, stack, rightRect, Style::PageArea::RIGHT, {Style::PageArea::RIGHT_TOP, Style::PageArea::RIGHT_MIDDLE, Style::PageArea::RIGHT_BOTTOM});
 }
 
-static Style::Media _constructMedia(Print::Settings const& settings) {
-    return {
-        .type = MediaType::SCREEN,
-        .width = Au{settings.paper.width},
-        .height = Au{settings.paper.height},
-        .aspectRatio = settings.paper.width / (f64)settings.paper.height,
-        .orientation = settings.orientation,
-
-        .resolution = Resolution{settings.scale, Resolution::X},
-        .scan = Scan::PROGRESSIVE,
-        .grid = false,
-        .update = Update::FAST,
-
-        .overflowBlock = OverflowBlock::SCROLL,
-        .overflowInline = OverflowInline::SCROLL,
-
-        .color = 8,
-        .colorIndex = 0,
-        .monochrome = 0,
-        .colorGamut = ColorGamut::SRGB,
-        .pointer = Pointer::FINE,
-        .hover = Hover::HOVER,
-        .anyPointer = Pointer::FINE,
-        .anyHover = Hover::HOVER,
-
-        .prefersReducedMotion = ReducedMotion::NO_PREFERENCE,
-        .prefersReducedTransparency = ReducedTransparency::NO_PREFERENCE,
-        .prefersContrast = Contrast::NO_PREFERENCE,
-        .forcedColors = Colors::NONE,
-        .prefersColorScheme = ColorScheme::LIGHT,
-        .prefersReducedData = ReducedData::NO_PREFERENCE,
-
-        // NOTE: Deprecated Media Features
-        .deviceWidth = Au{settings.paper.width},
-        .deviceHeight = Au{settings.paper.height},
-        .deviceAspectRatio = settings.paper.width / settings.paper.height,
-    };
-}
-
-export Generator<Print::Page> print(Gc::Ref<Dom::Document> dom, Print::Settings const& settings) {
-    auto media = _constructMedia(settings);
+export Generator<Print::Page> print(Gc::Ref<Dom::Document> dom, Print::Settings settings) {
+    auto media = Style::Media::forPrint(settings);
 
     Font::Database db;
-    if (not db.loadAll())
+    if (not db.loadSystemFonts())
         logWarn("not all fonts were properly loaded into database");
 
     Style::Computer computer{
@@ -173,9 +134,6 @@ export Generator<Print::Page> print(Gc::Ref<Dom::Document> dom, Print::Settings 
             media.width / Au{media.resolution.toDppx()},
             media.height / Au{media.resolution.toDppx()}
         };
-
-        auto pageSize = pageRect.size().cast<f64>();
-
         auto pageStack = makeRc<Scene::Stack>();
 
         InsetsAu pageMargin;
@@ -234,7 +192,16 @@ export Generator<Print::Page> print(Gc::Ref<Dom::Document> dom, Print::Settings 
         Layout::paint(fragment, *pageStack);
         pageStack->prepare();
 
-        co_yield Print::Page(settings.paper, makeRc<Scene::Clear>(makeRc<Scene::Transform>(pageStack, Math::Trans2f::scale(media.resolution.toDppx())), canvasColor));
+        co_yield Print::Page(
+            settings.paper,
+            makeRc<Scene::Clear>(
+                makeRc<Scene::Transform>(
+                    pageStack,
+                    Math::Trans2f::scale(media.resolution.toDppx())
+                ),
+                canvasColor
+            )
+        );
 
         if (outFragmentation.completelyLaidOut)
             break;
