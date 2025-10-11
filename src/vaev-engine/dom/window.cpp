@@ -41,13 +41,33 @@ export struct Window {
         invalidateRender();
     }
 
-    Async::Task<> loadLocationAsync(Ref::Url url) {
-        _document = co_trya$(
-            Vaev::Loader::fetchDocumentAsync(
-                _heap, *_client, url
-            )
-        );
+    void changeViewport(Vec2Au viewport) {
+        if (_media.changeViewport(viewport))
+            invalidateRender();
+    }
+
+    Async::Task<> loadLocationAsync(Ref::Url url, Ref::Uti intent = Ref::Uti::PUBLIC_OPEN) {
+        if (intent == Ref::Uti::PUBLIC_OPEN) {
+            _document = co_trya$(
+                Vaev::Loader::fetchDocumentAsync(
+                    _heap, *_client, url
+                )
+            );
+        } else if (intent == Ref::Uti::PUBLIC_MODIFY) {
+            _document = co_trya$(Vaev::Loader::viewSourceAsync(_heap, *_client, url));
+        } else {
+            co_return Error::invalidInput("unsupported intent");
+        }
+        invalidateRender();
         co_return Ok();
+    }
+
+    Ref::Url location() const {
+        return _document.upgrade()->url();
+    }
+
+    Gc::Ptr<Document> document() {
+        return _document;
     }
 
     Driver::RenderResult& ensureRender() {
@@ -56,6 +76,15 @@ export struct Window {
         Vec2Au viewportSize = {_media.width, _media.height};
         _render = Driver::render(_document.upgrade(), _media, {.small = viewportSize});
         return *_render;
+    }
+
+    void computeStyle() {
+        Font::Database db;
+        if (not db.loadSystemFonts())
+            logWarn("not all fonts were properly loaded into database");
+        Style::Computer computer{_media, *_document->styleSheets, db};
+        computer.build();
+        computer.styleDocument(*_document);
     }
 
     void invalidateRender() {
@@ -67,7 +96,7 @@ export struct Window {
     }
 
     [[clang::coro_wrapper]]
-    Generator<Print::Page> print(Print::Settings settings) {
+    Generator<Print::Page> print(Print::Settings settings) const {
         return Driver::print(_document.upgrade(), settings);
     }
 };

@@ -1,6 +1,7 @@
 export module Vaev.Engine:dom.element;
 
 import Karm.Core;
+import Karm.Scene;
 import :dom.attr;
 import :dom.node;
 import :dom.names;
@@ -33,6 +34,7 @@ export struct Element : Node {
     Map<QualifiedName, Rc<Attr>> attributes;
     Opt<Rc<Style::SpecifiedValues>> _specifiedValues; // FIXME: We should not have this store here
     TokenList classList;
+    Opt<Rc<Scene::Node>> imageContent;
 
     Element(QualifiedName const& qualifiedName)
         : qualifiedName(qualifiedName) {
@@ -76,7 +78,7 @@ export struct Element : Node {
         e(" qualifiedName={}", qualifiedName);
         if (this->attributes.len()) {
             e.indentNewline();
-            for (auto const& [name, attr] : this->attributes.iter()) {
+            for (auto const& [name, attr] : this->attributes.iterUnordered()) {
                 attr->repr(e);
             }
             e.deindent();
@@ -98,7 +100,7 @@ export struct Element : Node {
     }
 
     bool hasAttributeUnqualified(Str name) const {
-        for (auto const& [qualifiedName, _] : this->attributes.iter()) {
+        for (auto const& [qualifiedName, _] : this->attributes.iterUnordered()) {
             if (qualifiedName.name.str() == name) {
                 return true;
             }
@@ -114,7 +116,7 @@ export struct Element : Node {
     }
 
     Opt<Str> getAttributeUnqualified(Symbol name) const {
-        for (auto const& [qualifiedName, attr] : this->attributes.iter())
+        for (auto const& [qualifiedName, attr] : this->attributes.iterUnordered())
             if (qualifiedName.name == name)
                 return attr->value;
         return NONE;

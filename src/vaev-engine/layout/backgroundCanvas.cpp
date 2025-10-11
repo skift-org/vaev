@@ -34,7 +34,7 @@ void _patchBackgrounds(MutSlice<Layout::Box>& children) {
 export Gfx::Color fixupBackgrounds(Style::Computer& c, Gc::Ref<Dom::Document> doc, Layout::Tree& tree) {
     auto el = doc->documentElement();
     if (!el) {
-        return Gfx::WHITE;
+        return Gfx::ALPHA;
     }
 
     auto style = c.computeFor(Style::SpecifiedValues::initial(), *el);
@@ -55,12 +55,12 @@ export Gfx::Color fixupBackgrounds(Style::Computer& c, Gc::Ref<Dom::Document> do
                 _patchBackgrounds(children);
                 return _colorToGfx(childStyle->backgrounds->color);
             } else {
-                return Gfx::WHITE;
+                return Gfx::ALPHA;
             }
         }
     }
 
-    return Gfx::WHITE;
+    return Gfx::ALPHA;
 }
 
 } // namespace Vaev::Layout

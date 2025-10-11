@@ -338,7 +338,7 @@ export using Content = Union<
     None,
     Vec<Box>,
     InlineBox,
-    Rc<Gfx::Surface>,
+    Rc<Scene::Node>,
     SVGRoot>;
 
 export struct Attrs {
@@ -387,7 +387,7 @@ struct Box : Meta::NoCopy {
     }
 
     bool isReplaced() {
-        return content.is<Rc<Gfx::Surface>>() or content.is<SVGRoot>();
+        return content.is<Rc<Scene::Node>>() or content.is<SVGRoot>();
     }
 
     void repr(Io::Emit& e) const {
@@ -563,6 +563,15 @@ export struct Frag {
         return *box->style;
     }
 
+    // https://drafts.csswg.org/css-overflow-3/#scrollable
+    RectAu scrollableOverflow() const {
+        // NOSPEC: This is just an approximation of the spec
+        auto bound = metrics.borderBox();
+        for (auto c : children())
+            bound = bound.mergeWith(c.scrollableOverflow());
+        return bound;
+    }
+
     /// Offset the position of this fragment and its subtree.
     void offset(Vec2Au d) {
         metrics.position = metrics.position + d;
@@ -573,6 +582,13 @@ export struct Frag {
         } else if (auto svg = content.is<SVGRootFrag>()) {
             svg->offset(d);
         }
+    }
+
+    Slice<Frag> children() const {
+        if (auto children = content.is<Vec<Frag>>()) {
+            return *children;
+        }
+        return {};
     }
 
     MutSlice<Frag> children() {

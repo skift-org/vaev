@@ -117,6 +117,50 @@ export struct Computer {
         return Gfx::Fontface::fallback();
     }
 
+    // https://www.w3.org/TR/css-cascade-4/#author-presentational-hint-origin
+    static Vec<Style::StyleProp> _considerPresentationalHint(Gc::Ref<Dom::Element> el) {
+        if (el->namespaceUri() != Html::NAMESPACE)
+            return {};
+
+        Vec<Style::StyleProp> res;
+        // https://html.spec.whatwg.org/multipage/obsolete.html#dom-document-fgcolor
+        if (auto fgcolor = el->getAttribute(Html::FGCOLOR_ATTR)) {
+            auto value = parseValue<Color>(fgcolor.unwrap());
+            if (value)
+                res.pushBack(Style::ColorProp{value.take()});
+        }
+
+        // https://html.spec.whatwg.org/multipage/obsolete.html#dom-document-bgcolor
+        if (auto bgcolor = el->getAttribute(Html::BGCOLOR_ATTR)) {
+            auto value = parseValue<Color>(bgcolor.unwrap());
+            if (value)
+                res.pushBack(Style::BackgroundColorProp{value.take()});
+        }
+
+        // https://html.spec.whatwg.org/multipage/images.html#sizes-attributes
+        if (auto width = el->getAttribute(Html::WIDTH_ATTR)) {
+            auto value = parseValue<Size>(width.unwrap());
+            if (value)
+                res.pushBack(Style::WidthProp{value.take()});
+        }
+
+        // https://html.spec.whatwg.org/multipage/images.html#sizes-attributes
+        if (auto height = el->getAttribute(Html::HEIGHT_ATTR)) {
+            auto value = parseValue<Size>(height.unwrap());
+            if (value)
+                res.pushBack(Style::HeightProp{value.take()});
+        }
+
+        // https://html.spec.whatwg.org/multipage/input.html#the-size-attribute
+        if (auto size = el->getAttribute(Html::SIZE_ATTR)) {
+            auto value = parseValue<Integer>(size.unwrap());
+            if (value)
+                res.pushBack(WidthProp{CalcValue<PercentOr<Length>>{Length{static_cast<f64>(value.take()), Length::CH}}});
+        }
+
+        return res;
+    }
+
     // https://svgwg.org/specs/integration/#svg-css-sizing
     static void _applySVGElementSizingRules(Gc::Ref<Dom::Element> svgEl, Vec<Style::StyleProp>& styleProps) {
         if (auto parentEl = svgEl->parentNode()->is<Dom::Element>()) {
@@ -145,7 +189,7 @@ export struct Computer {
             return {};
 
         Vec<Style::StyleProp> styleProps;
-        for (auto [attr, attrValue] : el->attributes.iter()) {
+        for (auto [attr, attrValue] : el->attributes.iterUnordered()) {
             parseSVGPresentationAttribute(attr.name, attrValue->value, styleProps);
         }
 
@@ -159,9 +203,16 @@ export struct Computer {
     Rc<SpecifiedValues> computeFor(SpecifiedValues const& parent, Gc::Ref<Dom::Element> el) {
         MatchingRules matchingRules = _styleRuleLookup.buildMatchingRules(el);
 
+        // Non-CSS Presentational Hints
+        auto hints = _considerPresentationalHint(el);
+        StyleRule presentationHints{
+            .props = std::move(hints),
+            .origin = Origin::AUTHOR,
+        };
+        matchingRules.pushBack({&presentationHints, PRESENTATION_HINT_SPEC});
+
         // Get the style attribute if any
         auto styleAttr = el->style();
-
         StyleRule styleRule{
             .props = parseDeclarations<StyleProp>(styleAttr ? *styleAttr : ""),
             .origin = Origin::INLINE,
