@@ -13,7 +13,7 @@
 
 ## Features
 
-Veav currently supports a subset of web standards, including:
+Vaev currently supports a subset of web standards, including:
 
 - Most display types (excluding grid)
 - Standard CSS cascade behavior
@@ -27,13 +27,10 @@ For detailed compatibility and feature tracking, see our [WPT status page](https
 
 ## Trying It Out
 
-You can try out Veav by running the following command:
+You can try out Vaev by running the following command:
 
 ```bash
-pacman -S base-devel git ninja sdl2 nasm gcc-multilib liburing clang libseccomp lld
-
-# We need llvm 20 and arch doesn't have it yet
-yay -S clang-prefixed-release
+pacman -S base-devel git ninja sdl2 nasm gcc-multilib liburing clang libseccomp lld llvm jq
 
 git clone https://github.com/skift-org/vaev.git
 
