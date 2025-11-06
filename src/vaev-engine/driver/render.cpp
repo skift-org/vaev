@@ -21,11 +21,7 @@ export struct RenderResult {
 };
 
 export RenderResult render(Gc::Ref<Dom::Document> dom, Style::Media const& media, Layout::Viewport viewport) {
-    Font::Database db;
-    if (not db.loadSystemFonts())
-        logWarn("not all fonts were properly loaded into database");
-
-    Style::Computer computer{media, *dom->styleSheets, db};
+    Style::Computer computer{media, *dom->styleSheets, *dom->fontDatabase};
     computer.build();
     computer.styleDocument(*dom);
 
@@ -33,8 +29,6 @@ export RenderResult render(Gc::Ref<Dom::Document> dom, Style::Media const& media
         Layout::build(dom),
         viewport
     };
-
-    auto canvasColor = fixupBackgrounds(computer, dom, tree);
 
     auto [outDiscovery, root] = Layout::layoutCreateFragment(
         tree,
@@ -51,7 +45,7 @@ export RenderResult render(Gc::Ref<Dom::Document> dom, Style::Media const& media
 
     return {
         makeRc<Layout::Box>(std::move(tree.root)),
-        makeRc<Scene::Clear>(sceneRoot, canvasColor),
+        sceneRoot,
         makeRc<Layout::Frag>(std::move(root)),
     };
 }

@@ -129,14 +129,8 @@ Async::Task<> _fetchResourcesAsync(Http::Client& client, Gc::Ref<Dom::Node> node
             co_return Error::invalidInput("link element missing src");
         }
 
-        auto url = Ref::Url::resolveReference(node->baseURI(), Ref::parseUrlOrPath(*src));
-        if (not url) {
-            el->imageContent = _missingImagePlaceholder();
-            logWarn("failed to resolve image url: {}", url);
-            co_return Error::invalidInput("failed to resolve image url");
-        }
-
-        auto image = co_await _fetchImageContentAsync(client, url.unwrap());
+        auto url = Ref::Url::parse(*src, node->baseURI());
+        auto image = co_await _fetchImageContentAsync(client, url);
         if (not image) {
             el->imageContent = _missingImagePlaceholder();
             logWarn("failed to fetch image from {}: {}", url, image);
@@ -158,13 +152,9 @@ Async::Task<> _fetchResourcesAsync(Http::Client& client, Gc::Ref<Dom::Node> node
                 co_return Error::invalidInput("link element missing href");
             }
 
-            auto url = Ref::Url::resolveReference(node->baseURI(), Ref::parseUrlOrPath(*href));
-            if (not url) {
-                logWarn("failed to resolve stylesheet url: {}", url);
-                co_return Error::invalidInput("failed to resolve stylesheet url");
-            }
+            auto url = Ref::Url::parse(*href, node->baseURI());
+            auto sheet = co_await _fetchStylesheetAsync(client, url, Style::Origin::AUTHOR);
 
-            auto sheet = co_await _fetchStylesheetAsync(client, url.unwrap(), Style::Origin::AUTHOR);
             if (not sheet) {
                 logWarn("failed to fetch stylesheet from {}: {}", url, sheet);
                 co_return Error::invalidInput("failed to fetch stylesheet");
@@ -180,19 +170,24 @@ Async::Task<> _fetchResourcesAsync(Http::Client& client, Gc::Ref<Dom::Node> node
     co_return Ok();
 }
 
+Async::_Task<Rc<Font::Database>> _loadFontfacesAsync(Http::Client& client, Style::StyleSheetList const& stylesheets);
+
 static auto dumpDom = Debug::Flag::debug("web-dom", "Dump the loaded DOM tree");
 static auto dumpStylesheets = Debug::Flag::debug("web-stylesheets", "Dump the loaded stylesheets");
 
+// https://fetch.spec.whatwg.org/#scheme-fetch
 export Async::Task<Gc::Ref<Dom::Document>> fetchDocumentAsync(Gc::Heap& heap, Http::Client& client, Ref::Url const& url) {
-    if (url.scheme == "about") {
-        if (url.path.str() == "blank")
-            co_return co_await fetchDocumentAsync(heap, client, "bundle://vaev-engine/blank.xhtml"_url);
+    Ref::Url resolvedUrl = url;
 
-        if (url.path.str() == "start")
-            co_return co_await fetchDocumentAsync(heap, client, "bundle://vaev-engine/start-page.xhtml"_url);
+    // If request’s current URL’s path is the string "blank", 
+    if (url.scheme == "about" and url.path.str() == "blank") {
+        // then return a new response whose status message is `OK`, 
+        // header list is « (`Content-Type`, `text/html;charset=utf-8`) »
+        // and body is the empty byte sequence as a body.
+        resolvedUrl = Ref::Url::data("text/html"_mime, {});
     }
 
-    auto resp = co_trya$(client.getAsync(url));
+    auto resp = co_trya$(client.getAsync(resolvedUrl));
     auto dom = co_trya$(_loadDocumentAsync(heap, url, resp));
     auto stylesheets = heap.alloc<Style::StyleSheetList>();
 
@@ -207,6 +202,7 @@ export Async::Task<Gc::Ref<Dom::Document>> fetchDocumentAsync(Gc::Heap& heap, Ht
 
     (void)co_await _fetchResourcesAsync(client, *dom, *stylesheets);
     dom->styleSheets = stylesheets;
+    dom->fontDatabase = co_await _loadFontfacesAsync(client, *stylesheets);
 
     if (dumpDom)
         logDebugIf(dumpDom, "document tree: {}", dom);

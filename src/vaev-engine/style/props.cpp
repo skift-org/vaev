@@ -1217,24 +1217,25 @@ export struct BorderWidthProp {
 
 // MARK: Content ---------------------------------------------------------------
 
+// https://www.w3.org/TR/css-gcpm-3/
 // https://drafts.csswg.org/css-content/#content-property
 export struct ContentProp {
-    String value = initial();
+    Content value = initial();
 
     static constexpr Str name() { return "content"; }
 
-    static String initial() { return ""s; }
+    static constexpr Content initial() { return Keywords::NORMAL; }
 
     void apply(SpecifiedValues& c) const {
         c.content = value;
     }
 
-    static String load(SpecifiedValues const& c) {
+    static Content load(SpecifiedValues const& c) {
         return c.content;
     }
 
     Res<> parse(Cursor<Css::Sst>& c) {
-        value = try$(parseValue<String>(c));
+        value = try$(parseValue<Content>(c));
         return Ok();
     }
 };
@@ -1252,14 +1253,14 @@ export struct ClipPathProp {
 
     void apply(SpecifiedValues& c) const {
         if (auto clipShape = value.is<BasicShape>())
-            c.clip = *clipShape;
+            c.clip.cow() = *clipShape;
         else
-            c.clip = NONE;
+            c.clip.cow() = NONE;
     }
 
     static Value load(SpecifiedValues const& c) {
-        if (c.clip.has())
-            return c.clip.unwrap();
+        if (c.clip->has())
+            return c.clip->unwrap();
         return Keywords::NONE;
     }
 
@@ -2628,7 +2629,7 @@ export struct PositionProp {
 
     static Str name() { return "position"; }
 
-    static Position initial() { return Position::STATIC; }
+    static Position initial() { return Keywords::STATIC; }
 
     void apply(SpecifiedValues& c) const {
         c.position = value;
@@ -3368,6 +3369,33 @@ export struct SVGStrokeProp {
     }
 };
 
+// https://svgwg.org/svg2-draft/painting.html#StrokeOpacity
+export struct SvgStrokeOpacityProp {
+    Number value = initial();
+
+    static Str name() { return "stroke-opacity"; }
+
+    static f64 initial() { return 1; }
+
+    void apply(SpecifiedValues& c) const {
+        c.svg.cow().strokeOpacity = value;
+    }
+
+    static f64 load(SpecifiedValues const& c) {
+        return c.svg->strokeOpacity;
+    }
+
+    Res<> parse(Cursor<Css::Sst>& c) {
+        auto maybePercent = parseValue<Percent>(c);
+        if (maybePercent) {
+            value = maybePercent.unwrap().value() / 100;
+        } else {
+            value = try$(parseValue<Number>(c));
+        }
+        return Ok();
+    }
+};
+
 // https://svgwg.org/svg2-draft/painting.html#FillOpacity
 export struct FillOpacityProp {
     Number value = initial();
@@ -3670,6 +3698,7 @@ using _StyleProp = Union<
     SVGFillProp,
     SVGDProp,
     SVGStrokeProp,
+    SvgStrokeOpacityProp,
     SVGViewBoxProp,
     FillOpacityProp,
     StrokeWidthProp

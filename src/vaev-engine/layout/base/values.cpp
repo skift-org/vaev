@@ -5,7 +5,7 @@ import Karm.Math;
 import Karm.Logger;
 
 import :values;
-import :layout.base;
+import :layout.formating;
 import :layout.writing;
 
 namespace Vaev::Layout {
@@ -44,7 +44,6 @@ export struct Resolver {
         }
 
         switch (value.unit()) {
-
         case Length::EM:
             return Au::fromFloatNearest(value.val() * boxFont.unwrap().fontSize());
 
@@ -316,7 +315,7 @@ export struct Resolver {
         switch (op) {
         case CalcOp::ADD:
             return lhs + rhs;
-        case CalcOp::SUBSTRACT:
+        case CalcOp::SUBTRACT:
             return lhs - rhs;
         case CalcOp::MULTIPLY:
             return lhs * rhs;

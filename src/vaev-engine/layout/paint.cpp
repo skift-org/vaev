@@ -1,16 +1,20 @@
 export module Vaev.Engine:layout.paint;
 
-import Karm.Image;
-import Karm.Gc;
-import Karm.Scene;
+import Karm.Core;
 import Karm.Debug;
+import Karm.Gc;
 import Karm.Gfx;
-import Karm.Math;
+import Karm.Image;
 import Karm.Logger;
+import Karm.Math;
+import Karm.Scene;
 
 import :style;
+import :values;
 import :layout.base;
 import :layout.values;
+import :dom.node;
+import :dom.element;
 
 namespace Vaev::Layout {
 
@@ -71,9 +75,20 @@ Opt<Gfx::Outline> buildOutline(Metrics const& metrics, Style::SpecifiedValues co
 
 static bool _needsNewStackingContext(Frag const& frag) {
     return frag.style().zIndex != Keywords::AUTO or
-           frag.style().clip.has() or
+           frag.style().clip->has() or
            frag.style().transform->has() or
            frag.style().opacity != 1.0;
+}
+
+static bool isRootElement(Gc::Ptr<Dom::Element> el) {
+    if (not el)
+        return false;
+
+    auto doc = el->ownerDocument();
+    if (not doc)
+        return false;
+
+    return doc->documentElement() == el;
 }
 
 static void _paintFragBordersAndBackgrounds(Frag& frag, Scene::Stack& stack) {
@@ -81,8 +96,11 @@ static void _paintFragBordersAndBackgrounds(Frag& frag, Scene::Stack& stack) {
 
     Vec<Gfx::Fill> backgrounds;
     auto color = Vaev::resolve(cssBackground->color, frag.style().color);
-    if (color.alpha != 0)
-        backgrounds.pushBack(color);
+
+    if (color.alpha != 0) {
+        if (not isRootElement(frag.box->origin))
+            backgrounds.pushBack(color);
+    }
 
     auto currentColor = Vaev::resolve(frag.style().color, color);
     auto bordersWithoutRadii = buildBorders(frag.metrics, frag.style(), Vaev::resolve(frag.style().color, currentColor));
@@ -96,7 +114,11 @@ static void _paintFragBordersAndBackgrounds(Frag& frag, Scene::Stack& stack) {
 
         auto box = makeRc<Scene::Box>(bound, std::move(borders), std::move(outline.unwrapOr(Gfx::Outline{})), std::move(backgrounds));
         box->zIndex = _needsNewStackingContext(frag) ? Limits<isize>::MIN : 0;
-        stack.add(box);
+        if (isRootElement(frag.box->origin)) {
+            stack.add(makeRc<Scene::Clear>(box, color));
+        } else {
+            stack.add(box);
+        }
     }
 }
 
@@ -180,6 +202,7 @@ Rc<Scene::Node> _paintSVGRoot(SVGRootFrag& svgRoot, Gfx::Color currentColor) {
 
 static void _paintFrag(Frag& frag, Scene::Stack& stack) {
     auto& s = frag.style();
+
     if (s.visibility == Visibility::HIDDEN)
         return;
 
@@ -228,7 +251,7 @@ static void _paintChildren(Frag& frag, Scene::Stack& stack, auto predicate) {
 
         // NOTE: Positioned elements act as if they establish a stacking context
         auto position = s.position;
-        if (position != Position::STATIC) {
+        if (position != Keywords::STATIC) {
             if (predicate(s))
                 _paintStackingContext(c, stack);
             continue;
@@ -281,7 +304,7 @@ static Math::Vec2f _resolveBackgroundPosition(Resolver& resolver, BackgroundPosi
 
 static Rc<Scene::Clip> _applyClip(Frag const& frag, Rc<Scene::Node> content) {
     Math::Path result;
-    auto& clip = frag.style().clip.unwrap();
+    auto& clip = frag.style().clip->unwrap();
 
     // TODO: handle SVG cases (https://drafts.fxtf.org/css-masking/#typedef-geometry-box)
     auto [referenceBox, radii] = clip.referenceBox.visit(Visitor{
@@ -631,22 +654,22 @@ static void _paintStackingContext(Frag& frag, Scene::Stack& stack) {
 
     // 3. the in-flow, non-inline-level, non-positioned descendants.
     _paintChildren(frag, stack, [](Style::SpecifiedValues const& s) {
-        return s.zIndex == Keywords::AUTO and s.display != Display::INLINE and s.position == Position::STATIC;
+        return s.zIndex == Keywords::AUTO and s.display != Display::INLINE and s.position == Keywords::STATIC;
     });
 
     // 4. the non-positioned floats.
     _paintChildren(frag, stack, [](Style::SpecifiedValues const& s) {
-        return s.zIndex == Keywords::AUTO and s.position == Position::STATIC and s.float_ != Float::NONE;
+        return s.zIndex == Keywords::AUTO and s.position == Keywords::STATIC and s.float_ != Float::NONE;
     });
 
     // 5. the in-flow, inline-level, non-positioned descendants, including inline tables and inline blocks.
     _paintChildren(frag, stack, [](Style::SpecifiedValues const& s) {
-        return s.zIndex == Keywords::AUTO and s.display == Display::INLINE and s.position == Position::STATIC;
+        return s.zIndex == Keywords::AUTO and s.display == Display::INLINE and s.position == Keywords::STATIC;
     });
 
     // 6. the child stacking contexts with stack level 0 and the positioned descendants with stack level 0.
     _paintChildren(frag, stack, [](Style::SpecifiedValues const& s) {
-        return s.zIndex.unwrapOr<isize>(0) == 0 and s.position != Position::STATIC;
+        return s.zIndex.unwrapOr<isize>(0) == 0 and s.position != Keywords::STATIC;
     });
 
     // 7. the child stacking contexts with positive stack levels (least positive first).
@@ -661,7 +684,7 @@ static void _establishStackingContext(Frag& frag, Scene::Stack& stack) {
     _paintStackingContext(frag, *innerStack);
 
     Rc<Scene::Node> out = innerStack;
-    if (frag.style().clip.has())
+    if (frag.style().clip->has())
         out = _applyClip(frag, out);
     if (frag.style().transform->has())
         out = _applyTransform(frag, out);

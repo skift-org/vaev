@@ -10,16 +10,6 @@ import Karm.Gfx;
 import Karm.Math;
 import Karm.Logger;
 
-import :values;
-import :layout.block;
-import :layout.flex;
-import :layout.grid;
-import :layout.inline_;
-import :layout.replaced;
-import :layout.positioned;
-import :layout.table;
-import :layout.values;
-
 namespace Vaev::Layout {
 
 static Opt<Rc<FormatingContext>> _constructFormatingContext(Box& box) {
@@ -303,7 +293,16 @@ Output layout(Tree& tree, Box& box, Input input) {
                                 ? input.breakpointTraverser.getEnd()
                                 : NONE;
 
+        if (box.style->position.is<RunningPosition>()) {
+            return Output{
+                .size = {},
+                .completelyLaidOut = true,
+                .firstBaselineSet = {},
+                .lastBaselineSet = {},
+            };
+        }
         auto parentFrag = input.fragment;
+
         Frag currFrag(&box);
         input.fragment = input.fragment ? &currFrag : nullptr;
 
@@ -346,8 +345,10 @@ Output layout(Tree& tree, Box& box, Input input) {
 
 Output layout(Tree& tree, Input input) {
     auto out = layout(tree, tree.root, input);
-    if (input.fragment)
-        layoutPositioned(tree, input.fragment->children()[0], input.containingBlock);
+    if (input.fragment) {
+        layoutPositioned(tree, input.fragment->children()[0], input.containingBlock, input);
+    }
+
     return out;
 }
 

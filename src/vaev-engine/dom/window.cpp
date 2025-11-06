@@ -49,12 +49,12 @@ export struct Window {
     Async::Task<> loadLocationAsync(Ref::Url url, Ref::Uti intent = Ref::Uti::PUBLIC_OPEN) {
         if (intent == Ref::Uti::PUBLIC_OPEN) {
             _document = co_trya$(
-                Vaev::Loader::fetchDocumentAsync(
+                Loader::fetchDocumentAsync(
                     _heap, *_client, url
                 )
             );
         } else if (intent == Ref::Uti::PUBLIC_MODIFY) {
-            _document = co_trya$(Vaev::Loader::viewSourceAsync(_heap, *_client, url));
+            _document = co_trya$(Loader::viewSourceAsync(_heap, *_client, url));
         } else {
             co_return Error::invalidInput("unsupported intent");
         }
@@ -79,10 +79,7 @@ export struct Window {
     }
 
     void computeStyle() {
-        Font::Database db;
-        if (not db.loadSystemFonts())
-            logWarn("not all fonts were properly loaded into database");
-        Style::Computer computer{_media, *_document->styleSheets, db};
+        Style::Computer computer{_media, *_document->styleSheets, *_document->fontDatabase};
         computer.build();
         computer.styleDocument(*_document);
     }
@@ -96,7 +93,7 @@ export struct Window {
     }
 
     [[clang::coro_wrapper]]
-    Generator<Print::Page> print(Print::Settings settings) const {
+    Generator<Print::Page> print(Print::Settings const& settings) const {
         return Driver::print(_document.upgrade(), settings);
     }
 };
