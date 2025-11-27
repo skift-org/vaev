@@ -28,23 +28,6 @@ export Symbol NAMESPACE = "http://www.w3.org/1999/xhtml"_sym;
 #include "defs/ns-html-tag-names.inc"
 #undef TAG
 
-export Array const VOID_TAGS = {
-    AREA_TAG,
-    BASE_TAG,
-    BR_TAG,
-    COL_TAG,
-    EMBED_TAG,
-    HR_TAG,
-    IMG_TAG,
-    INPUT_TAG,
-    LINK_TAG,
-    META_TAG,
-    PARAM_TAG,
-    SOURCE_TAG,
-    TRACK_TAG,
-    WBR_TAG
-};
-
 // FIXME: remaining elements from https://html.spec.whatwg.org/#has-an-element-in-scope
 export Array const BASIC_SCOPE_DELIMITERS = {
     APPLET_TAG,
@@ -94,6 +77,7 @@ export Symbol qualifiedAttrNameCased(Str name) {
     if (eqCi(Str(#VALUE), name)) \
         return Symbol::from(Str(#VALUE));
 #include "defs/ns-svg-attr-names.inc"
+
 #undef ATTR
     return Symbol::from(name);
 }
@@ -103,6 +87,7 @@ export Symbol qualifiedTagNameCased(Str name) {
     if (eqCi(Str(#VALUE), name)) \
         return Symbol::from(Str(#VALUE));
 #include "defs/ns-svg-tag-names.inc"
+
 #undef TAG
     return Symbol::from(name);
 }
@@ -127,6 +112,7 @@ namespace Dom {
 
 void Dom::QualifiedName::repr(Io::Emit& e) const {
     Str displayNamespace = ns.str();
+
     if (ns == Html::NAMESPACE) {
         displayNamespace = "html";
     } else if (ns == Svg::NAMESPACE) {
@@ -134,6 +120,7 @@ void Dom::QualifiedName::repr(Io::Emit& e) const {
     } else if (ns == MathMl::NAMESPACE) {
         displayNamespace = "mathml";
     }
+
     e("{}:{}", displayNamespace, name);
 }
 
