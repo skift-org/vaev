@@ -32,11 +32,11 @@ You can try out Vaev by running the following command:
 ```bash
 pacman -S base-devel git ninja sdl2 nasm gcc-multilib liburing clang libseccomp lld llvm jq
 
-git clone https://github.com/skift-org/vaev.git
+git clone https://codeberg.org/skift/vaev.git
 
 cd vaev
 
-pip install git+https://github.com/cute-engineering/cutekit
+pip install git+https://codeberg.org/cute-engineering/cutekit
 
 python -m cutekit run --release vaev-browser -- file.html
 ```
