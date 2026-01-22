@@ -8,6 +8,7 @@ import Karm.Core;
 import Karm.Http;
 import Karm.Ref;
 import Karm.Image;
+import Karm.Logger;
 import Karm.Crypto;
 import Karm.Sys;
 import Vaev.Engine;
@@ -50,13 +51,13 @@ export struct WebDriver {
     }
 
     // https://www.w3.org/TR/webdriver2/#new-session
-    Async::Task<Ref::Uuid> newSessionAsync() {
+    Async::Task<Ref::Uuid> newSessionAsync(Async::CancellationToken ct) {
         auto sessionId = co_try$(Ref::Uuid::v4());
         auto windowHandle = co_try$(Ref::Uuid::v4());
         auto session = makeRc<Session>(sessionId);
 
         auto window = Dom::Window::create();
-        co_trya$(window->loadLocationAsync("about:blank"_url));
+        co_trya$(window->loadLocationAsync("about:blank"_url, Ref::Uti::PUBLIC_OPEN, ct));
 
         session->windows.put(windowHandle, window);
         session->current = windowHandle;
@@ -98,10 +99,10 @@ export struct WebDriver {
     // https://www.w3.org/TR/webdriver2/#navigation
 
     // https://www.w3.org/TR/webdriver2/#navigate-to
-    Async::Task<> navigateToAsync(Ref::Uuid sessionId, Ref::Url url) {
+    Async::Task<> navigateToAsync(Ref::Uuid sessionId, Ref::Url url, Async::CancellationToken ct) {
         auto session = co_try$(getSession(sessionId));
         auto window = co_try$(session->currentBrowsingContext());
-        co_return co_await window->loadLocationAsync(url);
+        co_return co_await window->loadLocationAsync(url, Ref::Uti::PUBLIC_OPEN, ct);
     }
 
     // https://www.w3.org/TR/webdriver2/#get-current-url
@@ -112,10 +113,10 @@ export struct WebDriver {
     }
 
     // https://www.w3.org/TR/webdriver2/#refresh
-    Async::Task<> refreshAsync(Ref::Uuid sessionId) {
+    Async::Task<> refreshAsync(Ref::Uuid sessionId, Async::CancellationToken ct) {
         auto session = co_try$(getSession(sessionId));
         auto window = co_try$(session->currentBrowsingContext());
-        co_return co_await window->refreshAsync();
+        co_return co_await window->refreshAsync(ct);
     }
 
     // https://www.w3.org/TR/webdriver2/#get-title
@@ -174,11 +175,11 @@ export struct WebDriver {
     }
 
     // https://www.w3.org/TR/webdriver2/#new-window
-    Async::Task<Ref::Uuid> newWindowAsync(Ref::Uuid sessionId) {
+    Async::Task<Ref::Uuid> newWindowAsync(Ref::Uuid sessionId, Async::CancellationToken ct) {
         auto session = co_try$(getSession(sessionId));
         auto windowHandle = co_try$(Ref::Uuid::v4());
         auto window = Dom::Window::create();
-        co_trya$(window->loadLocationAsync("about:blank"_url));
+        co_trya$(window->loadLocationAsync("about:blank"_url, Ref::Uti::PUBLIC_OPEN, ct));
         session->windows.put(windowHandle, window);
         session->current = windowHandle;
         co_return Ok(windowHandle);
@@ -232,8 +233,8 @@ export struct WebDriver {
         // FIXME: We don't support javascript yet, let's pretend we are
 
         // https://github.com/web-platform-tests/wpt/blob/bbfc05f2af01d92e2c5af0f8a37b580e233f48f1/tools/wptrunner/wptrunner/executors/executorwebdriver.py#L1070
-        if (contains(body, R"js(return [window.outerWidth - window.innerWidth,
-                       window.outerHeight - window.innerHeight];")js"s)) {
+        if (contains(body, "return [window.outerWidth - window.innerWidth,\n"
+                           "                       window.outerHeight - window.innerHeight];"s)) {
             return Ok(Serde::Array{0, 0});
         }
 
@@ -248,8 +249,10 @@ export struct WebDriver {
             return Ok(Serde::Array{"complete"s, "complete"s, Serde::Array{}});
         }
 
-        else
+        else {
+            logWarn("Could not evaluate javascript {#}", body);
             return Error::unsupported("unsupported operation");
+        }
     }
 
     // MARK: 17. Screen capture ------------------------------------------------
