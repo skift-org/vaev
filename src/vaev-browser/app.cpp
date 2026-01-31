@@ -31,6 +31,11 @@ enum struct Status {
     LOADED,
 };
 
+struct Bookmark {
+    String name;
+    Ref::Url url;
+};
+
 struct State {
     Status status = Status::LOADED;
     Res<> loadingResult = Ok();
@@ -41,6 +46,7 @@ struct State {
     InspectState inspect = {};
     bool wireframe = false;
     String locationInput;
+    Vec<Bookmark> bookmarks;
 
     State(Rc<Dom::Window> window)
         : history{Navigate{window->location()}},
@@ -302,16 +308,43 @@ Ui::Child inspectorContent(State const& s) {
     );
 }
 
+Ui::Child bookmarkList(State const& s) {
+    if (not s.bookmarks) {
+        return Ui::labelMedium(Ui::GRAY500, "No bookmarks") |
+               Ui::center() |
+               Ui::grow();
+    }
+
+    Ui::Children children;
+    for (auto& bm : s.bookmarks) {
+        children.pushBack(Ui::button(Model::bind<Navigate>(bm.url), Mdi::BOOKMARK, bm.name));
+    }
+
+    return Ui::vflow(
+               4,
+               std::move(children)
+           ) |
+           Ui::insets(6) |
+           Ui::vscroll() | Ui::grow();
+}
+
+Ui::Child bookmarPanel(State const& s) {
+    Ui::Children children;
+    for (auto& bm : s.bookmarks) {
+        children.pushBack(Ui::button(Ui::SINK<>, Mdi::BOOKMARK, bm.name));
+    }
+
+    return Kr::sidePanelContent({
+        Kr::sidePanelTitle(Model::bind(SidePanel::CLOSE), "Bookmarks"),
+        Kr::separator(),
+        bookmarkList(s),
+    });
+}
+
 Ui::Child sidePanel(State const& s) {
     switch (s.sidePanel) {
     case SidePanel::BOOKMARKS:
-        return Kr::sidePanelContent({
-            Kr::sidePanelTitle(Model::bind(SidePanel::CLOSE), "Bookmarks"),
-            Kr::separator(),
-            Ui::labelMedium(Ui::GRAY500, "No bookmarks") |
-                Ui::center() |
-                Ui::grow(),
-        });
+        return bookmarPanel(s);
 
     case SidePanel::DEVELOPER_TOOLS:
         return Kr::sidePanelContent({
@@ -360,10 +393,14 @@ Ui::Child appContent(State const& s) {
 }
 
 export Ui::Child app(Rc<Dom::Window> window) {
+    State state = window;
+    state.bookmarks.pushBack({.name = "smnx.sh"s, .url = "http://smnx.sh"_url});
+    state.bookmarks.pushBack({.name = "The Project (snapshot)"s, .url = "bundle://vaev-browser.main/www-the-project.html"_url});
+    state.bookmarks.pushBack({.name = "Google (snapshot)"s, .url = "bundle://vaev-browser.main/google.html"_url});
+    state.bookmarks.pushBack({.name = "Hackernews (snapshot)"s, .url = "bundle://vaev-browser.main/hackernews.html"_url});
+
     return Ui::reducer<Model>(
-        {
-            window,
-        },
+        std::move(state),
         [](State const& s) {
             auto scaffold = Kr::scaffold({
                 .icon = Mdi::SURFING,

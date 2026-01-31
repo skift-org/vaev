@@ -99,8 +99,8 @@ export struct HtmlParser : HtmlSink {
 
     // 13.2.2 MARK: Parse errors
     // https://html.spec.whatwg.org/multipage/parsing.html#parse-errors
-    void _raise(Str msg) {
-        logWarn("{}: {}", _insertionMode, msg);
+    void _raise(Str) {
+        // logWarn("{}: {}", _insertionMode, msg);
     }
 
     // 13.2.4.3 MARK: The list of active formatting elements

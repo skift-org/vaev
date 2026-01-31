@@ -106,8 +106,8 @@ export struct HtmlLexer {
         _state = state;
     }
 
-    void _raise(Str msg) {
-        logWarn("{}: {}", _state, msg);
+    void _raise(Str) {
+        // logWarn("{}: {}", _state, msg);
     }
 
     bool _isAppropriateEndTagToken() {
