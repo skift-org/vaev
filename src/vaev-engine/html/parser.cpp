@@ -15,6 +15,85 @@ namespace Vaev::Html {
 
 static auto debugParser = Debug::Flag::debug("web-html-parser"s, "Log HTML parser state transitions"s);
 
+// https://html.spec.whatwg.org/multipage/parsing.html#the-stack-of-open-elements
+struct _ElementStack {
+    Vec<Gc::Ref<Dom::Element>> _vec{};
+
+    usize len() const {
+        return _vec.len();
+    }
+
+    bool isEmpty() const {
+        return len() == 0;
+    }
+
+    void push(Gc::Ref<Dom::Element> const& el) {
+        return _vec.pushBack(el);
+    }
+
+    Gc::Ref<Dom::Element> pop() {
+        return _vec.popBack();
+    }
+
+    template <typename... Names>
+    void popUntilOneOf(Names&&... names) {
+        while (not isEmpty()) {
+            if (oneOf(pop()->qualifiedName, std::forward<Names>(names)...))
+                break;
+        }
+    }
+
+    Opt<Gc::Ref<Dom::Element>> top() const {
+        if (isEmpty())
+            return NONE;
+
+        return _vec[len() - 1];
+    }
+
+    Opt<Gc::Ref<Dom::Element>> bottom() const {
+        if (isEmpty())
+            return NONE;
+
+        return _vec[0];
+    }
+
+    Opt<Tuple<Gc::Ref<Dom::Element>, isize>> findLast(Dom::QualifiedName const& name) const {
+        for (isize i = len() - 1; i >= 0; --i) {
+            if (_vec[i]->qualifiedName == name) {
+                return Tuple{_vec[i], i};
+            }
+        }
+
+        return NONE;
+    }
+
+    bool any(auto f) {
+        for (auto const& el : _vec) {
+            if (f(el))
+                return true;
+        }
+        return false;
+    }
+
+    bool contains(Dom::QualifiedName const& name) const {
+        for (auto& el : _vec) {
+            if (el->qualifiedName == name) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool removeAll(Gc::Ref<Dom::Element> const& val) {
+        return _vec.removeAll(val);
+    }
+
+    Gc::Ref<Dom::Element>& operator[](usize i) {
+        return _vec[i];
+    }
+};
+
 #define FOREACH_INSERTION_MODE(MODE) \
     MODE(INITIAL)                    \
     MODE(BEFORE_HTML)                \
@@ -57,17 +136,21 @@ export struct HtmlParser : HtmlSink {
 
     Mode _insertionMode = Mode::INITIAL;
     Mode _originalInsertionMode = Mode::INITIAL;
+    Vec<Mode> _templateInsertionModes;
 
     HtmlLexer _lexer;
     Gc::Ref<Dom::Document> _document;
-    Vec<Gc::Ref<Dom::Element>> _openElements;
     Gc::Ptr<Dom::Element> _headElement = nullptr;
     Gc::Ptr<Dom::Element> _formElement = nullptr;
+
+    _ElementStack _openElements;
 
     // https://html.spec.whatwg.org/multipage/parsing.html#concept-frag-parse-context
     Gc::Ptr<Dom::Element> _contextElement = nullptr;
 
     Vec<HtmlToken> _pendingTableCharacterTokens;
+
+    bool _ignoreNextTokenIfLineFeed = false;
 
     HtmlParser(Gc::Heap& heap, Gc::Ref<Dom::Document> document)
         : _heap(heap), _document(document) {
@@ -78,9 +161,11 @@ export struct HtmlParser : HtmlSink {
 
     // https://html.spec.whatwg.org/multipage/parsing.html#current-node
     Gc::Ref<Dom::Element> _currentElement() {
-        if (_openElements.len() == 0)
+        auto el = _openElements.top();
+        if (!el)
             panic("no current element");
-        return last(_openElements);
+
+        return *el;
     }
 
     // https://html.spec.whatwg.org/multipage/parsing.html#adjusted-current-node
@@ -99,8 +184,9 @@ export struct HtmlParser : HtmlSink {
 
     // 13.2.2 MARK: Parse errors
     // https://html.spec.whatwg.org/multipage/parsing.html#parse-errors
-    void _raise(Str) {
-        // logWarn("{}: {}", _insertionMode, msg);
+    void _raise(Diag::Collector& diags, Io::LocSpan span, Str msg) {
+        auto mode = Io::toLowerCase(Io::toStr(_insertionMode)).take();
+        diags.emit(Diag::Diagnostic::warning(Io::format("{} {}", msg, mode)).withPrimaryLabel(span));
     }
 
     // 13.2.4.3 MARK: The list of active formatting elements
@@ -178,19 +264,29 @@ export struct HtmlParser : HtmlSink {
     // https://html.spec.whatwg.org/multipage/parsing.html#creating-and-inserting-nodes
 
     struct AdjustedInsertionLocation {
-        Gc::Ptr<Dom::Element> parent;
+        Gc::Ptr<Dom::Node> parent;
+        Gc::Ptr<Dom::Node> insertBefore;
 
         // https://html.spec.whatwg.org/multipage/parsing.html#insert-an-element-at-the-adjusted-insertion-location
         void insert(Gc::Ref<Dom::Node> node) {
             // NOSPEC
-            if (parent)
-                parent->appendChild(node);
+            if (parent) {
+                if (insertBefore) {
+                    parent->insertBefore(node, insertBefore);
+                } else {
+                    parent->appendChild(node);
+                }
+            }
         }
 
-        Gc::Ptr<Dom::Node> lastChild() {
+        Gc::Ptr<Dom::Node> previousSibling() {
             // NOSPEC
+            if (insertBefore)
+                return insertBefore->previousSibling();
+
             if (not parent->hasChildren())
                 return nullptr;
+
             return parent->lastChild();
         }
     };
@@ -207,44 +303,67 @@ export struct HtmlParser : HtmlSink {
 
         // 2. Determine the adjusted insertion location using the first
         //    matching steps from the following list:
+        AdjustedInsertionLocation adjustedInsertionLocation;
 
         //    If foster parenting is enabled and target is a table, tbody, tfoot, thead, or tr element
-
         //    NOTE: Foster parenting happens when content is misnested in tables.
+        if (_fosterParenting and (_currentElement()->qualifiedName == Html::TABLE_TAG or
+                                  _currentElement()->qualifiedName == Html::TBODY_TAG or
+                                  _currentElement()->qualifiedName == Html::TFOOT_TAG or
+                                  _currentElement()->qualifiedName == Html::THEAD_TAG or
+                                  _currentElement()->qualifiedName == Html::TR_TAG)) {
 
-        //    1. Let last template be the last template element in the stack of open elements, if any.
+            //    1. Let last template be the last template element in the stack of open elements, if any.
+            Opt<Tuple<Gc::Ref<Dom::Element>, isize>> lastTemplate = _openElements.findLast(Html::TEMPLATE_TAG);
 
-        //    2. Let last table be the last table element in the stack of open elements, if any.
+            //    2. Let last table be the last table element in the stack of open elements, if any.
+            Opt<Tuple<Gc::Ref<Dom::Element>, isize>> lastTable = _openElements.findLast(Html::TABLE_TAG);
 
-        //    3. If there is a last template and either there is no last table,
-        //       or there is one, but last template is lower (more recently added)
-        //       than last table in the stack of open elements,
-        //       then: let adjusted insertion location be inside last template's
-        //       template contents, after its last child (if any), and abort these steps.
+            //    3. If there is a last template and either there is no last table,
+            //       or there is one, but last template is lower (more recently added)
+            //       than last table in the stack of open elements,
+            //       then: let adjusted insertion location be inside last template's
+            //       template contents, after its last child (if any), and abort these steps.
+            if (lastTemplate and (not lastTable or lastTemplate->v1 > lastTable->v1)) {
+                // TODO: Use the template's template content instead
+                return {lastTemplate->v0, nullptr};
+            }
 
-        //    4. If there is no last table, then let adjusted insertion location be
-        //       inside the first element in the stack of open elements (the html element),
-        //       after its last child (if any), and abort these steps. (fragment case)
+            //    4. If there is no last table, then let adjusted insertion location be
+            //       inside the first element in the stack of open elements (the html element),
+            //       after its last child (if any), and abort these steps. (fragment case)
+            if (!lastTable) {
+                // TODO: Handle template case
+                return {*_openElements.bottom(), nullptr};
+            }
 
-        //    5. If last table has a parent node, then let adjusted insertion location
-        //       be inside last table's parent node, immediately before last table,
-        //       and abort these steps.
+            //    5. If last table has a parent node, then let adjusted insertion location
+            //       be inside last table's parent node, immediately before last table,
+            //       and abort these steps.
+            if (lastTable->v0->hasParentNode()) {
+                return {lastTable->v0->parentNode(), lastTable->v0};
+            }
 
-        //    6. Let previous element be the element immediately above last table
-        //       in the stack of open elements.
+            //    6. Let previous element be the element immediately above last table
+            //       in the stack of open elements.
+            Gc::Ref<Dom::Element> previousElement = _openElements[lastTable->v1 - 1];
 
-        //    7. Let adjusted insertion location be inside previous element,
-        //       after its last child (if any).
+            //    7. Let adjusted insertion location be inside previous element,
+            //       after its last child (if any).
+            adjustedInsertionLocation = {previousElement, nullptr};
+        } else {
+            //  Otherwise: Let adjusted insertion location be inside target,
+            //             after its last child (if any).
+            adjustedInsertionLocation = {target, nullptr};
+        }
 
-        //  Otherwise: Let adjusted insertion location be inside target,
-        //             after its last child (if any).
-
+        // TODO:
         // 3. If the adjusted insertion location is inside a template element,
         //    let it instead be inside the template element's template contents,
         //    after its last child (if any).
 
         // 4. Return the adjusted insertion location.
-        return {target};
+        return adjustedInsertionLocation;
     }
 
     // https://html.spec.whatwg.org/multipage/parsing.html#create-an-element-for-the-token
@@ -347,7 +466,7 @@ export struct HtmlParser : HtmlSink {
         }
 
         // 4. Push element onto the stack of open elements so that it is the new current node.
-        _openElements.pushBack(el);
+        _openElements.push(el);
 
         // 5. Return element.
         return el;
@@ -371,9 +490,9 @@ export struct HtmlParser : HtmlSink {
 
         // 4. If there is a Text node immediately before the adjusted insertion
         //    location, then append data to that Text node's data.
-        auto lastChild = location.lastChild();
-        if (lastChild and lastChild->nodeType() == Dom::NodeType::TEXT) {
-            auto text = lastChild->is<Dom::Text>();
+        auto previousSibling = location.previousSibling();
+        if (previousSibling and previousSibling->nodeType() == Dom::NodeType::TEXT) {
+            auto text = previousSibling->is<Dom::Text>();
             text->appendData(c);
         }
 
@@ -560,7 +679,7 @@ export struct HtmlParser : HtmlSink {
     static void _generateImpliedEndTags(HtmlParser& b, Opt<Dom::QualifiedName> except = NONE) {
         while (contains(IMPLIED_END_TAGS, b._currentElement()->qualifiedName) and
                b._currentElement()->qualifiedName != except) {
-            b._openElements.popBack();
+            b._openElements.pop();
         }
     }
 
@@ -572,7 +691,7 @@ export struct HtmlParser : HtmlSink {
         if (_openElements.len() == 0)
             panic("html element should always be in scope");
 
-        for (usize i = _openElements.len() - 1; i >= 0; --i) {
+        for (isize i = _openElements.len() - 1; i >= 0; --i) {
             auto& el = _openElements[i];
 
             // 2. If node is target node, terminate in a match state.
@@ -638,7 +757,7 @@ export struct HtmlParser : HtmlSink {
         return Dom::QuirkMode::NO;
     }
 
-    void _handleInitialMode(HtmlToken& t) {
+    void _handleInitialMode(HtmlToken& t, Diag::Collector& diags) {
         // A character token that is one of U+0009 CHARACTER TABULATION,
         // U+000A LINE FEED (LF), U+000C FORM FEED (FF),
         // U+000D CARRIAGE RETURN (CR), or U+0020 SPACE
@@ -671,17 +790,17 @@ export struct HtmlParser : HtmlSink {
         // Anything else
         else {
             _switchTo(Mode::BEFORE_HTML);
-            accept(t);
+            accept(t, diags);
         }
     }
 
     // 13.2.6.4.2 MARK: The "before html" insertion mode
     // https://html.spec.whatwg.org/multipage/parsing.html#the-before-html-insertion-mode
-    void _handleBeforeHtml(HtmlToken& t) {
+    void _handleBeforeHtml(HtmlToken& t, Diag::Collector& diags) {
         // A DOCTYPE token
         if (t.type == HtmlToken::DOCTYPE) {
             // ignore
-            _raise("unexpected DOCTYPE");
+            _raise(diags, t.span, "unexpected DOCTYPE");
         }
 
         // A comment token
@@ -704,14 +823,14 @@ export struct HtmlParser : HtmlSink {
         else if (t.type == HtmlToken::START_TAG and t.name == "html") {
             auto el = _createElementFor(t, Html::NAMESPACE);
             _document->appendChild(el);
-            _openElements.pushBack(el);
+            _openElements.push(el);
             _switchTo(Mode::BEFORE_HEAD);
         }
 
         // Any other end tag
         else if (t.type == HtmlToken::END_TAG and not(t.name == "head" or t.name == "body" or t.name == "html" or t.name == "br")) {
             // ignore
-            _raise("unexpected end tag");
+            _raise(diags, t.span, "unexpected end tag");
         }
 
         // An end tag whose tag name is one of: "head", "body", "html", "br"
@@ -719,15 +838,15 @@ export struct HtmlParser : HtmlSink {
         else {
             auto el = _heap.alloc<Dom::Element>(Html::HTML_TAG);
             _document->appendChild(el);
-            _openElements.pushBack(el);
+            _openElements.push(el);
             _switchTo(Mode::BEFORE_HEAD);
-            accept(t);
+            accept(t, diags);
         }
     }
 
     // 13.2.6.4.3 MARK: The "before head" insertion mode
     // https://html.spec.whatwg.org/multipage/parsing.html#the-before-head-insertion-mode
-    void _handleBeforeHead(HtmlToken& t) {
+    void _handleBeforeHead(HtmlToken& t, Diag::Collector& diags) {
         // A character token that is one of U+0009 CHARACTER TABULATION,
         // U+000A LINE FEED (LF), U+000C FORM FEED (FF),
         // U+000D CARRIAGE RETURN (CR), or U+0020 SPACE
@@ -748,13 +867,13 @@ export struct HtmlParser : HtmlSink {
         // A comment token
         else if (t.type == HtmlToken::DOCTYPE) {
             // Parse error. Ignore the token.
-            _raise("unexpected DOCTYPE token");
+            _raise(diags, t.span, "unexpected DOCTYPE token");
         }
 
         // A start tag whose tag name is "html"
         else if (t.type == HtmlToken::START_TAG and t.name == "html") {
             // Process the token using the rules for the "in body" insertion mode.
-            _acceptIn(Mode::IN_BODY, t);
+            _acceptIn(Mode::IN_BODY, t, diags);
         }
 
         // A start tag whose tag name is "head"
@@ -766,7 +885,7 @@ export struct HtmlParser : HtmlSink {
         // Anything else
         else if (t.type == HtmlToken::END_TAG and not(t.name == "head" or t.name == "body" or t.name == "html" or t.name == "br")) {
             // ignore
-            _raise("unexpected end tag");
+            _raise(diags, t.span, "unexpected end tag");
         }
 
         // An end tag whose tag name is one of: "head", "body", "html", "br"
@@ -777,17 +896,17 @@ export struct HtmlParser : HtmlSink {
             headToken.name = "head"_sym;
             _headElement = _insertHtmlElement(headToken);
             _switchTo(Mode::IN_HEAD);
-            accept(t);
+            accept(t, diags);
         }
     }
 
     // 13.2.6.4.4 MARK: The "in head" insertion mode
     // https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inhead
-    void _handleInHead(HtmlToken& t) {
+    void _handleInHead(HtmlToken& t, Diag::Collector& diags) {
         auto anythingElse = [&] {
-            _openElements.popBack();
+            _openElements.pop();
             _switchTo(Mode::AFTER_HEAD);
-            accept(t);
+            accept(t, diags);
         };
 
         // A character token that is one of U+0009 CHARACTER TABULATION,
@@ -808,27 +927,27 @@ export struct HtmlParser : HtmlSink {
 
         // A DOCTYPE token
         else if (t.type == HtmlToken::DOCTYPE) {
-            _raise("unexpected DOCTYPE token");
+            _raise(diags, t.span, "unexpected DOCTYPE token");
         }
 
         // A start tag whose tag name is "html"
         else if (t.type == HtmlToken::START_TAG and (t.name == "html")) {
-            _acceptIn(Mode::IN_BODY, t);
+            _acceptIn(Mode::IN_BODY, t, diags);
         }
 
         // A start tag whose tag name is one of: "base", "basefont", "bgsound", "link"
         else if (t.type == HtmlToken::START_TAG and (t.name == "base" or t.name == "basefont" or t.name == "bgsound" or t.name == "link")) {
             _insertHtmlElement(t);
-            _openElements.popBack();
+            _openElements.pop();
             _acknowledgeSelfClosingFlag(t);
         }
 
         // A start tag whose tag name is "meta"
         else if (t.type == HtmlToken::START_TAG and (t.name == "meta")) {
             _insertHtmlElement(t);
-            _openElements.popBack();
+            _openElements.pop();
             _acknowledgeSelfClosingFlag(t);
-            // TODO: Handle handle speculative parsing
+            // TODO: Handle speculative parsing
         }
 
         // A start tag whose tag name is "title"
@@ -889,7 +1008,7 @@ export struct HtmlParser : HtmlSink {
             localtion.insert(el);
 
             // 7. Push the element onto the stack of open elements so that it is the new current node.
-            _openElements.pushBack(el);
+            _openElements.push(el);
 
             // 8. Switch the tokenizer to the script data state.
             _lexer._switchTo(HtmlLexer::SCRIPT_DATA);
@@ -900,7 +1019,7 @@ export struct HtmlParser : HtmlSink {
             // 10. Switch the insertion mode to "text".
             _switchTo(Mode::TEXT);
         } else if (t.type == HtmlToken::END_TAG and (t.name == "head")) {
-            _openElements.popBack();
+            _openElements.pop();
             _switchTo(Mode::AFTER_HEAD);
         } else if (t.type == HtmlToken::END_TAG and (t.name == "body" or t.name == "html" or t.name == "br")) {
             anythingElse();
@@ -910,7 +1029,7 @@ export struct HtmlParser : HtmlSink {
             // NOSPEC: We don't support templates
         } else if ((t.type == HtmlToken::START_TAG and (t.name == "head")) or t.type == HtmlToken::END_TAG) {
             // ignore
-            _raise("unexpected head tag");
+            _raise(diags, t.span, "unexpected head tag");
         } else {
             anythingElse();
         }
@@ -918,27 +1037,27 @@ export struct HtmlParser : HtmlSink {
 
     // 13.2.6.4.5 MARK: The "in head noscript" insertion mode
     // https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inheadnoscript
-    void _handleInHeadNoScript(HtmlToken& t) {
+    void _handleInHeadNoScript(HtmlToken& t, Diag::Collector& diags) {
         auto anythingElse = [&] {
-            _raise("unexpected token");
-            _openElements.popBack();
+            _raise(diags, t.span, "unexpected token");
+            _openElements.pop();
             _switchTo(Mode::IN_HEAD);
-            accept(t);
+            accept(t, diags);
         };
 
         // A DOCTYPE token
         if (t.type == HtmlToken::DOCTYPE) {
-            _raise("unexpected DOCTYPE token");
+            _raise(diags, t.span, "unexpected DOCTYPE token");
         }
 
         // A start tag whose tag name is "html"
         else if (t.type == HtmlToken::START_TAG and (t.name == "html")) {
-            _acceptIn(Mode::IN_BODY, t);
+            _acceptIn(Mode::IN_BODY, t, diags);
         }
 
         // An end tag whose tag name is "noscript"
         else if (t.type == HtmlToken::END_TAG and (t.name == "noscript")) {
-            _openElements.popBack();
+            _openElements.pop();
             _switchTo(Mode::IN_HEAD);
         }
 
@@ -957,7 +1076,7 @@ export struct HtmlParser : HtmlSink {
             (t.type == HtmlToken::START_TAG and
              (t.name == "basefont" or t.name == "bgsound" or t.name == "link" or t.name == "meta" or t.name == "noframes" or t.name == "style"))
         ) {
-            _acceptIn(Mode::IN_HEAD, t);
+            _acceptIn(Mode::IN_HEAD, t, diags);
         }
 
         // An end tag whose tag name is "br"
@@ -972,7 +1091,7 @@ export struct HtmlParser : HtmlSink {
             t.type == HtmlToken::END_TAG
         ) {
             // ignore
-            _raise("unexpected end tag");
+            _raise(diags, t.span, "unexpected end tag");
         }
 
         // Anything else
@@ -983,14 +1102,14 @@ export struct HtmlParser : HtmlSink {
 
     // 13.2.6.4.6 MARK: The "after head" insertion mode
     // https://html.spec.whatwg.org/multipage/parsing.html#the-after-head-insertion-mode
-    void _handleAfterHead(HtmlToken& t) {
+    void _handleAfterHead(HtmlToken& t, Diag::Collector& diags) {
         auto anythingElse = [&] {
             HtmlToken bodyToken;
             bodyToken.type = HtmlToken::START_TAG;
             bodyToken.name = "body"_sym;
             _insertHtmlElement(bodyToken);
             _switchTo(Mode::IN_BODY);
-            accept(t);
+            accept(t, diags);
         };
 
         // A character token that is one of
@@ -1011,12 +1130,12 @@ export struct HtmlParser : HtmlSink {
 
         // A DOCTYPE token
         else if (t.type == HtmlToken::DOCTYPE) {
-            _raise("unexpected DOCTYPE token");
+            _raise(diags, t.span, "unexpected DOCTYPE token");
         }
 
         // A start tag whose tag name is "html"
         else if (t.type == HtmlToken::START_TAG and (t.name == "html")) {
-            _acceptIn(Mode::IN_BODY, t);
+            _acceptIn(Mode::IN_BODY, t, diags);
         }
 
         // A start tag whose tag name is "body"
@@ -1043,15 +1162,15 @@ export struct HtmlParser : HtmlSink {
              t.name == "script" or t.name == "style" or
              t.name == "template" or t.name == "title")
         ) {
-            _raise("unexpected start tag");
-            _openElements.pushBack(_headElement.upgrade());
-            _acceptIn(Mode::IN_HEAD, t);
-            _openElements.removeAll(_headElement);
+            _raise(diags, t.span, "unexpected start tag");
+            _openElements.push(_headElement.upgrade());
+            _acceptIn(Mode::IN_HEAD, t, diags);
+            _openElements.removeAll(*_headElement);
         }
 
         // An end tag whose tag name is "template"
         else if (t.type == HtmlToken::END_TAG and (t.name == "template")) {
-            _acceptIn(Mode::IN_HEAD, t);
+            _acceptIn(Mode::IN_HEAD, t, diags);
         }
 
         // An end tag whose tag name is one of: "body", "html", "br"
@@ -1063,7 +1182,7 @@ export struct HtmlParser : HtmlSink {
         // Any other end tag
         else if (t.type == HtmlToken::END_TAG or (t.type == HtmlToken::START_TAG and t.name == "head")) {
             // ignore
-            _raise("unexpected head tag");
+            _raise(diags, t.span, "unexpected head tag");
         }
 
         // Anything else
@@ -1074,33 +1193,23 @@ export struct HtmlParser : HtmlSink {
 
     // 13.2.6.4.7 MARK: The "in body" insertion mode
     // https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inbody
-    void _handleInBody(HtmlToken& t) {
-        auto closePElementIfInButtonScope = [&]() {
-            // https://html.spec.whatwg.org/#close-a-p-element
-            // If the stack of open elements has a p element in button scope, then close a p element.
-            if (_hasElementInButtonScope(Html::P_TAG)) {
+    void _handleInBody(HtmlToken& t, Diag::Collector& diags) {
+        // https://html.spec.whatwg.org/#close-a-p-element
+        auto closePElement = [&]() {
+            // Generate implied end tags, except for p elements.
+            _generateImpliedEndTags(*this, Html::P_TAG);
 
-                // Generate implied end tags, except for p elements.
-                _generateImpliedEndTags(*this, Html::P_TAG);
+            // If the current node is not a p element, then this is a parse error.
+            if (_currentElement()->qualifiedName != Html::P_TAG)
+                _raise(diags, t.span, "unexpected p element");
 
-                // If the current node is not a p element, then this is a parse error.
-                if (_currentElement()->qualifiedName != Html::P_TAG)
-                    _raise("unexpected p element");
-
-                // Pop elements from the stack of open elements until a p element has been popped from the stack.
-                while (_openElements.len() > 0) {
-                    auto lastEl = last(_openElements);
-
-                    _openElements.popBack();
-                    if (lastEl->qualifiedName == Html::P_TAG)
-                        break;
-                }
-            }
+            // Pop elements from the stack of open elements until a p element has been popped from the stack.
+            _openElements.popUntilOneOf(Html::P_TAG);
         };
 
         // A character token that is U+0000 NULL
         if (t.type == HtmlToken::CHARACTER and t.rune == '\0') {
-            _raise("unexpected NULL character");
+            _raise(diags, t.span, "unexpected NULL character");
         }
 
         // A character token that is one of
@@ -1128,19 +1237,118 @@ export struct HtmlParser : HtmlSink {
 
         // A DOCTYPE token
         else if (t.type == HtmlToken::DOCTYPE) {
-            _raise("unexpected DOCTYPE token");
+            _raise(diags, t.span, "unexpected DOCTYPE token");
         }
 
-        // TODO: A start tag whose tag name is "html"
+        // A start tag whose tag name is "html"
+        else if (t.type == HtmlToken::START_TAG and t.name == "html") {
+            _raise(diags, t.span, "unexpected html start tag");
 
-        // TODO: A start tag whose tag name is one of: "base", "basefont", "bgsound", "link", "meta", "noframes", "script", "style", "template", "title"
+            // If there is a template element on the stack of open elements, then ignore the token.
+            if (_openElements.contains(Html::TEMPLATE_TAG)) {
+                return;
+            }
+
+            // Otherwise, for each attribute on the token, check to see if the attribute is already present on the top element of the
+            // stack of open elements. If it is not, add the attribute and its corresponding value to that element.
+            for (auto const& attr : t.attrs) {
+                auto name = Dom::QualifiedName{""_sym, attr.name};
+
+                if (!_currentElement()->hasAttribute(name)) {
+                    _currentElement()->setAttribute(name, attr.value);
+                }
+            }
+        }
+
+        // A start tag whose tag name is one of: "base", "basefont", "bgsound", "link", "meta", "noframes", "script", "style", "template", "title"
         // An end tag whose tag name is "template"
+        else if (
+            (t.type == HtmlToken::START_TAG and oneOf(t.name, "base", "basefont", "bgsound", "link", "meta", "noframes", "script", "style", "template", "title")) or
+            (t.type == HtmlToken::END_TAG and t.name == "template")
+        ) {
+            // Process the token using the rules for the "in head" insertion mode.
+            _acceptIn(Mode::IN_HEAD, t, diags);
+        }
 
-        // TODO: A start tag whose tag name is "body"
+        // A start tag whose tag name is "body"
+        else if (t.type == HtmlToken::START_TAG and t.name == "body") {
+            _raise(diags, t.span, "unexpected body start tag");
 
-        // TODO: A start tag whose tag name is "frameset"
+            // If the stack of open elements has only one node on it, or if the second element on the stack of open elements is not
+            // a body element, or if there is a template element on the stack of open elements, then ignore the token.
+            // (fragment case or there is a template element on the stack)
+            if (_openElements.len() == 1 or _openElements[1]->qualifiedName != Html::BODY_TAG or _openElements.contains(Html::TEMPLATE_TAG)) {
+                return;
+            }
 
-        // TODO: An end-of-file token
+            // Otherwise, set the frameset-ok flag to "not ok"; then, for each attribute on the token, check to see if the attribute is
+            // already present on the body element (the second element) on the stack of open elements, and if it is not, add the attribute
+            // and its corresponding value to that element.
+            _framesetOk = false;
+
+            for (auto const& attr : t.attrs) {
+                auto name = Dom::QualifiedName{""_sym, attr.name};
+
+                if (!_openElements[1]->hasAttribute(name)) {
+                    _openElements[1]->setAttribute(name, attr.value);
+                }
+            }
+        }
+
+        // A start tag whose tag name is "frameset"
+        else if (t.type == HtmlToken::START_TAG and t.name == "frameset") {
+            _raise(diags, t.span, "unexpected frameset");
+
+            // If the stack of open elements has only one node on it, or if the second element on the stack of open elements is not
+            // a body element, then ignore the token. (fragment case or there is a template element on the stack)
+            if (_openElements.len() == 1 or _openElements[1]->qualifiedName != Html::BODY_TAG or not _framesetOk) {
+                return;
+            }
+
+            // Otherwise, run the following steps:
+
+            // 1. Remove the second element on the stack of open elements from its parent node, if it has one.
+            if (_openElements[1]->hasParentNode()) {
+                _openElements[1]->parentNode()->removeChild(_openElements[1]);
+            }
+
+            // 2. Pop all the nodes from the bottom of the stack of open elements, from the current node up to, but not including, the root html element.
+            while (_openElements.len() > 1)
+                _openElements.pop();
+
+            // 3. Insert an HTML element for the token.
+            _insertHtmlElement(t);
+
+            // 4. Switch the insertion mode to "in frameset".
+            _switchTo(Mode::IN_FRAMESET);
+        }
+
+        // An end-of-file token
+        else if (t.type == HtmlToken::END_OF_FILE) {
+            // If the stack of template insertion modes is not empty, then process the token using the rules for the "in template" insertion mode.
+            if (Karm::any(_templateInsertionModes)) {
+                _acceptIn(Mode::IN_TEMPLATE, t, diags);
+                return;
+            }
+
+            // Otherwise, follow these steps:
+
+            // 1. If there is a node in the stack of open elements that is not either a dd element, a dt element, an li element, an optgroup element,
+            // an option element, a p element, an rb element, an rp element, an rt element, an rtc element, a tbody element, a td element, a tfoot element,
+            // a th element, a thead element, a tr element, the body element, or the html element, then this is a parse error.
+            if (_openElements.any([](auto const& el) {
+                    return not oneOf(
+                        el->qualifiedName,
+                        Html::DD_TAG, Html::DT_TAG, Html::LI_TAG, Html::OPTGROUP_TAG, Html::OPTION_TAG, Html::P_TAG,
+                        Html::RB_TAG, Html::RP_TAG, Html::RT_TAG, Html::RTC_TAG, Html::TBODY_TAG, Html::TD_TAG,
+                        Html::TFOOT_TAG, Html::TH_TAG, Html::THEAD_TAG, Html::TR_TAG, Html::BODY_TAG, Html::HTML_TAG
+                    );
+                })) {
+                _raise(diags, t.span, "unexpected end of file");
+            }
+
+            // 2. Stop parsing.
+        }
 
         // An end tag whose tag name is "body"
         // An end tag whose tag name is "html"
@@ -1148,7 +1356,7 @@ export struct HtmlParser : HtmlSink {
             // If the stack of open elements does not have a body element in
             // scope, this is a parse error; ignore the token.
             if (not _hasElementInScope(Html::BODY_TAG)) {
-                _raise("unexpected end tag for body");
+                _raise(diags, t.span, "unexpected end tag for body");
                 return;
             }
 
@@ -1156,21 +1364,28 @@ export struct HtmlParser : HtmlSink {
             // is not an implied end tag or
             // tbody element, a td element, a tfoot element, a th element, a thead element, a tr element, the body element, or the html
             // then this is a parse error.
-            for (auto& el : _openElements) {
-                if (not contains(IMPLIED_END_TAGS, el->qualifiedName) and
-                    el->qualifiedName != Html::TBODY_TAG and el->qualifiedName != Html::TD_TAG and el->qualifiedName != Html::TFOOT_TAG and
-                    el->qualifiedName != Html::TH_TAG and el->qualifiedName != Html::THEAD_TAG and el->qualifiedName != Html::TR_TAG and
-                    el->qualifiedName != Html::BODY_TAG and el->qualifiedName != Html::HTML_TAG) {
-                    _raise("unexpected end tag for body");
-                    break;
-                }
+            if (_openElements.any([](auto& el) {
+                    bool isOtherAllowedTag = oneOf(
+                        el->qualifiedName,
+                        Html::TBODY_TAG,
+                        Html::TD_TAG,
+                        Html::TFOOT_TAG,
+                        Html::TH_TAG,
+                        Html::THEAD_TAG,
+                        Html::TR_TAG,
+                        Html::BODY_TAG,
+                        Html::HTML_TAG
+                    );
+                    return contains(IMPLIED_END_TAGS, el->qualifiedName) and not isOtherAllowedTag;
+                })) {
+                _raise(diags, t.span, "unexpected end tag for body");
             }
 
             // Switch the insertion mode to "after body".
             _switchTo(Mode::AFTER_BODY);
 
             if (t.name == "html")
-                accept(t);
+                accept(t, diags);
 
         }
 
@@ -1182,15 +1397,19 @@ export struct HtmlParser : HtmlSink {
         // "summary", "ul"
         else if (
             t.type == HtmlToken::START_TAG and
-            (t.name == "address" or t.name == "article" or t.name == "aside" or t.name == "blockquote" or
-             t.name == "center" or t.name == "details" or t.name == "dialog" or t.name == "dir" or
-             t.name == "div" or t.name == "dl" or t.name == "fieldset" or t.name == "figcaption" or
-             t.name == "figure" or t.name == "footer" or t.name == "header" or t.name == "hgroup" or
-             t.name == "main" or t.name == "menu" or t.name == "nav" or t.name == "ol" or
-             t.name == "p" or t.name == "search" or t.name == "section" or t.name == "summary" or t.name == "ul")
+            oneOf(
+                t.name,
+                "address", "article", "aside", "blockquote", "center",
+                "details", "dialog", "dir", "div", "dl", "fieldset",
+                "figcaption", "figure", "footer", "header", "hgroup",
+                "main", "menu", "nav", "ol", "p", "search", "section",
+                "summary", "ul"
+            )
         ) {
             // If the stack of open elements has a p element in button scope, then close a p element.
-            closePElementIfInButtonScope();
+            if (_hasElementInButtonScope(Html::P_TAG)) {
+                closePElement();
+            }
 
             // Insert an HTML element for the token.
             _insertHtmlElement(t);
@@ -1199,35 +1418,120 @@ export struct HtmlParser : HtmlSink {
         // A start tag whose tag name is one of: "h1", "h2", "h3", "h4", "h5", "h6"
         else if (
             t.type == HtmlToken::START_TAG and
-            (t.name == "h1" or t.name == "h2" or t.name == "h3" or t.name == "h4" or
-             t.name == "h5" or t.name == "h6")
+            oneOf(t.name, "h1", "h2", "h3", "h4", "h5", "h6")
         ) {
             // If the stack of open elements has a p element in button scope, then close a p element.
-            closePElementIfInButtonScope();
+            if (_hasElementInButtonScope(Html::P_TAG)) {
+                closePElement();
+            }
 
             // If the current node is an HTML element whose tag name is one of "h1", "h2", "h3", "h4", "h5", or "h6",
             // then this is a parse error; pop the current node off the stack of open elements.
-            if (
-                _currentElement()->qualifiedName == Html::H1_TAG or _currentElement()->qualifiedName == Html::H2_TAG or
-                _currentElement()->qualifiedName == Html::H3_TAG or _currentElement()->qualifiedName == Html::H4_TAG or
-                _currentElement()->qualifiedName == Html::H5_TAG or _currentElement()->qualifiedName == Html::H6_TAG
-            ) {
-                _raise("unexpected h1-h6 tag");
-                _openElements.popBack();
+            if (oneOf(_currentElement()->qualifiedName, Html::H1_TAG, Html::H2_TAG, Html::H3_TAG, Html::H4_TAG, Html::H5_TAG, Html::H6_TAG)) {
+                _raise(diags, t.span, "unexpected h1-h6 tag");
+                _openElements.pop();
             }
 
             // Insert an HTML element for the token.
             _insertHtmlElement(t);
         }
 
-        // TODO: A start tag whose tag name is one of: "pre", "listing"
+        // A start tag whose tag name is one of: "pre", "listing"
+        else if (t.type == HtmlToken::START_TAG and oneOf(t.name, "pre", "listing")) {
+            // If the stack of open elements has a p element in button scope, then close a p element.
+            if (_hasElementInButtonScope(Html::P_TAG)) {
+                closePElement();
+            }
 
-        // TODO: A start tag whose tag name is "form"
+            // Insert an HTML element for the token.
+            _insertHtmlElement(t);
 
-        // TODO: A start tag whose tag name is "li"
+            // If the next token is a U+000A LINE FEED (LF) character token, then ignore that token and move on to the next one.
+            // (Newlines at the start of pre blocks are ignored as an authoring convenience.)
+            _ignoreNextTokenIfLineFeed = true;
 
-        // TODO: A start tag whose tag name is one of: "dd", "dt"
-        else if (t.type == HtmlToken::START_TAG and (t.name == "dd" or t.name == "dt")) {
+            // Set the frameset-ok flag to "not ok".
+            _framesetOk = false;
+        }
+
+        // A start tag whose tag name is "form"
+        else if (t.type == HtmlToken::START_TAG and t.name == "form") {
+            // If the form element pointer is not null, and there is no template element on the stack of open elements,
+            if (_formElement and not _openElements.contains(Html::TEMPLATE_TAG)) {
+                // then this is a parse error; ignore the token.
+                _raise(diags, t.span, "unexpected form tag");
+                return;
+            }
+
+            // Otherwise:
+
+            // 1. If the stack of open elements has a p element in button scope, then close a p element.
+            if (_hasElementInButtonScope(Html::P_TAG)) {
+                closePElement();
+            }
+
+            // 2. Insert an HTML element for the token, and, if there is no template element on the stack of open elements,
+            // set the form element pointer to point to the element created.
+            auto createdElement = _insertHtmlElement(t);
+            if (not _openElements.contains(Html::TEMPLATE_TAG)) {
+                _formElement = createdElement;
+            }
+        }
+
+        // A start tag whose tag name is "li"
+        else if (t.type == HtmlToken::START_TAG and t.name == "li") {
+            // 1. Set the frameset-ok flag to "not ok".
+            _framesetOk = false;
+
+            // 2. Initialize node to be the current node (the bottommost node of the stack).
+            usize curr = _openElements.len();
+
+            auto done = [&] {
+                // 6. If the stack of open elements has a p element in button scope, then close a p element.
+                if (_hasElementInButtonScope(Html::P_TAG)) {
+                    closePElement();
+                }
+
+                // 7. Insert an HTML element for the token.
+                _insertHtmlElement(t);
+            };
+
+            // 3. Loop:
+            while (curr > 0) {
+                auto tag = _openElements[curr - 1]->qualifiedName;
+                // If node is a li element, then run these substeps:
+                if (tag == Html::LI_TAG) {
+                    // 1. Generate implied end tags, except for li elements.
+                    _generateImpliedEndTags(*this, Html::LI_TAG);
+
+                    // 2. If the current node is not a li element, then this is a parse error.
+                    if (_currentElement()->qualifiedName != Html::LI_TAG) {
+                        _raise(diags, t.span, "unexpected li tag");
+                    }
+
+                    // 3. Pop elements from the stack of open elements until an li element has been popped from the stack.
+                    _openElements.popUntilOneOf(Html::LI_TAG);
+
+                    // 4. Jump to the step labeled done below.
+                    done();
+                    return;
+                }
+
+                // 4. If node is in the special category, but is not an address,
+                //    div, or p element, then jump to the step labeled done below.
+                if (_isSpecial(tag) and not oneOf(tag, Html::ADDRESS_TAG, Html::DIV_TAG, Html::P_TAG)) {
+                    done();
+                    return;
+                }
+
+                // 5. Otherwise, set node to the previous entry in the stack of open
+                //    elements and return to the step labeled loop.
+                curr--;
+            }
+        }
+
+        // A start tag whose tag name is one of: "dd", "dt"
+        else if (t.type == HtmlToken::START_TAG and oneOf(t.name, "dd", "dt")) {
             // 1. Set the frameset-ok flag to "not ok".
             _framesetOk = false;
 
@@ -1236,6 +1540,9 @@ export struct HtmlParser : HtmlSink {
 
             auto done = [&] {
                 // 7. If the stack of open elements has a p element in button scope, then close a p element.
+                if (_hasElementInButtonScope(Html::P_TAG)) {
+                    closePElement();
+                }
 
                 // 8. Insert an HTML element for the token.
                 _insertHtmlElement(t);
@@ -1251,13 +1558,11 @@ export struct HtmlParser : HtmlSink {
 
                     // 2. If the current node is not a dd element, then this is a parse error.
                     if (_currentElement()->qualifiedName != Html::DD_TAG) {
-                        _raise("unexpected dd tag");
+                        _raise(diags, t.span, "unexpected dd tag");
                     }
 
                     // 3. Pop elements from the stack of open elements until a dd element has been popped from the stack.
-                    while (Karm::any(_openElements) and _openElements.popBack()->qualifiedName != Html::DD_TAG) {
-                        // do nothing
-                    }
+                    _openElements.popUntilOneOf(Html::DD_TAG);
 
                     // 4. Jump to the step labeled done below.
                     done();
@@ -1270,13 +1575,11 @@ export struct HtmlParser : HtmlSink {
 
                     // 2. If the current node is not a dt element, then this is a parse error.
                     if (_currentElement()->qualifiedName != Html::DT_TAG) {
-                        _raise("unexpected dt tag");
+                        _raise(diags, t.span, "unexpected dt tag");
                     }
 
                     // 3. Pop elements from the stack of open elements until a dt element has been popped from the stack.
-                    while (Karm::any(_openElements) and _openElements.popBack()->qualifiedName != Html::DT_TAG) {
-                        // do nothing
-                    }
+                    _openElements.popUntilOneOf(Html::DT_TAG);
 
                     // 4. Jump to the step labeled done below.
                     done();
@@ -1285,7 +1588,7 @@ export struct HtmlParser : HtmlSink {
 
                 // 5. If node is in the special category, but is not an address,
                 //    div, or p element, then jump to the step labeled done below.
-                if (_isSpecial(tag) and not(tag == Html::ADDRESS_TAG or tag == Html::DIV_TAG or tag == Html::P_TAG)) {
+                if (_isSpecial(tag) and not oneOf(tag, Html::ADDRESS_TAG, Html::DIV_TAG, Html::P_TAG)) {
                     done();
                     return;
                 }
@@ -1296,25 +1599,204 @@ export struct HtmlParser : HtmlSink {
             }
         }
 
-        // TODO: A start tag whose tag name is "plaintext"
+        // A start tag whose tag name is "plaintext"
+        else if (t.type == HtmlToken::START_TAG and t.name == "plaintext") {
+            // If the stack of open elements has a p element in button scope, then close a p element.
+            if (_hasElementInButtonScope(Html::P_TAG)) {
+                closePElement();
+            }
 
-        // TODO: A start tag whose tag name is "button"
+            // Insert an HTML element for the token.
+            _insertHtmlElement(t);
 
-        // TODO: An end tag whose tag name is one of: "address", "article", "aside", "blockquote", "button", "center", "details", "dialog", "dir", "div", "dl", "fieldset", "figcaption", "figure", "footer", "header", "hgroup", "listing", "main", "menu", "nav", "ol", "pre", "search", "section", "summary", "ul"
+            // Switch the tokenizer to the PLAINTEXT state.
+            _lexer._switchTo(HtmlLexer::PLAINTEXT);
+        }
 
-        // TODO: An end tag whose tag name is "form"
+        // A start tag whose tag name is "button"
+        else if (t.type == HtmlToken::START_TAG and t.name == "button") {
+            // 1. If the stack of open elements has a button element in scope, then run these substeps:
+            if (_hasElementInScope(Html::BUTTON_TAG)) {
+                // 1. Parse error.
+                _raise(diags, t.span, "unexpected button tag");
 
-        // TODO: An end tag whose tag name is "p"
+                // 2. Generate implied end tags.
+                _generateImpliedEndTags(*this);
 
-        // TODO: An end tag whose tag name is "li"
+                // 3. Pop elements from the stack of open elements until a button element has been popped from the stack.
+                _openElements.popUntilOneOf(Html::BUTTON_TAG);
+            }
 
-        // TODO: An end tag whose tag name is one of: "dd", "dt"
+            // 2. Reconstruct the active formatting elements, if any.
+            _reconstructActiveFormattingElements();
+
+            // 3. Insert an HTML element for the token.
+            _insertHtmlElement(t);
+
+            // 4. Set the frameset-ok flag to "not ok".
+            _framesetOk = false;
+        }
+
+        // An end tag whose tag name is one of:
+        // "address", "article", "aside", "blockquote", "button", "center", "details", "dialog",
+        // "dir", "div", "dl", "fieldset", "figcaption", "figure", "footer", "header", "hgroup",
+        // "listing", "main", "menu", "nav", "ol", "pre", "search", "section", "summary", "ul"
+        else if (
+            t.type == HtmlToken::END_TAG and
+            oneOf(
+                t.name,
+                "address", "article", "aside", "blockquote", "button", "center", "details", "dialog",
+                "dir", "div", "dl", "fieldset", "figcaption", "figure", "footer", "header", "hgroup",
+                "listing", "main", "menu", "nav", "ol", "pre", "search", "section", "summary", "ul"
+            )
+        ) {
+            // If the stack of open elements does not have an element in scope that is an HTML element with the same tag name
+            // as that of the token,
+            if (not _hasElementInScope(Dom::QualifiedName{Html::NAMESPACE, t.name})) {
+                // then this is a parse error; ignore the token.
+                _raise(diags, t.span, "unexpected end tag");
+                return;
+            }
+
+            // Otherwise, run these steps:
+
+            // 1. Generate implied end tags.
+            _generateImpliedEndTags(*this);
+
+            // 2. If the current node is not an HTML element with the same tag name as that of the token,
+            if (_currentElement()->qualifiedName.name != t.name) {
+                // then this is a parse error.
+                _raise(diags, t.span, "unexpected end tag");
+            }
+
+            // 3. Pop elements from the stack of open elements until an HTML element with the same tag name as the
+            // token has been popped from the stack.
+            _openElements.popUntilOneOf(Dom::QualifiedName{Html::NAMESPACE, t.name});
+        }
+
+        // An end tag whose tag name is "form"
+        else if (t.type == HtmlToken::END_TAG and t.name == "form") {
+            // If there is no template element on the stack of open elements, then run these substeps:
+            if (not _openElements.contains(Html::TEMPLATE_TAG)) {
+                // 1. Let node be the element that the form element pointer is set to, or null if it is not set to an element.
+                auto node = _formElement;
+
+                // 2. Set the form element pointer to null.
+                _formElement = nullptr;
+
+                // 3. If node is null or if the stack of open elements does not have node in scope,
+                if (not node or not _hasElementInScope(node->qualifiedName)) {
+                    // then this is a parse error; return and ignore the token.
+                    _raise(diags, t.span, "unexpected form end tag");
+                    return;
+                }
+
+                // 4. Generate implied end tags.
+                _generateImpliedEndTags(*this);
+
+                // 5. If the current node is not node, then this is a parse error.
+                if (_currentElement() != node) {
+                    _raise(diags, t.span, "unexpected form end tag");
+                }
+
+                // 6. Remove node from the stack of open elements.
+                _openElements.removeAll(*node);
+            }
+
+            // If there is a template element on the stack of open elements, then run these substeps instead:
+            else {
+                // 1. If the stack of open elements does not have a form element in scope,
+                if (not _hasElementInScope(Html::FORM_TAG)) {
+                    // then this is a parse error; return and ignore the token.
+                    _raise(diags, t.span, "unexpected form end tag");
+                    return;
+                }
+
+                // 2. Generate implied end tags.
+                _generateImpliedEndTags(*this);
+
+                // 3. If the current node is not a form element, then this is a parse error.
+                if (_currentElement()->qualifiedName != Html::FORM_TAG) {
+                    _raise(diags, t.span, "unexpected form end tag");
+                }
+
+                // 4. Pop elements from the stack of open elements until a form element has been popped from the stack.
+                _openElements.popUntilOneOf(Html::FORM_TAG);
+            }
+        }
+
+        // An end tag whose tag name is "p"
+        else if (t.type == HtmlToken::END_TAG and t.name == "p") {
+            // If the stack of open elements does not have a p element in button scope,
+
+            if (not _hasElementInButtonScope(Html::P_TAG)) {
+                // then this is a parse error;
+                _raise(diags, t.span, "unexpected p end tag");
+
+                // insert an HTML element for a "p" start tag token with no attributes.
+                _insertHtmlElement(HtmlToken{
+                    .type = HtmlToken::START_TAG,
+                    .name = "p"_sym,
+                });
+            }
+
+            // Close a p element.
+            closePElement();
+        }
+
+        // An end tag whose tag name is "li"
+        else if (t.type == HtmlToken::END_TAG and t.name == "li") {
+            // If the stack of open elements does not have an li element in list item scope,
+            if (not _hasElementInListItemScope(Html::LI_TAG)) {
+                // then this is a parse error; ignore the token.
+                _raise(diags, t.span, "unexpected li end tag");
+                return;
+            }
+
+            // Otherwise, run these steps:
+
+            // 1. Generate implied end tags, except for li elements.
+            _generateImpliedEndTags(*this, Html::LI_TAG);
+
+            // 2. If the current node is not an li element, then this is a parse error.
+            if (_currentElement()->qualifiedName != Html::LI_TAG) {
+                _raise(diags, t.span, "unexpected li end tag");
+            }
+
+            // 3. Pop elements from the stack of open elements until an li element has been popped from the stack.
+            _openElements.popUntilOneOf(Html::LI_TAG);
+        }
+
+        // An end tag whose tag name is one of: "dd", "dt"
+        else if (t.type == HtmlToken::END_TAG and oneOf(t.name, "dd", "dt")) {
+            auto qualifiedName = Dom::QualifiedName{Html::NAMESPACE, t.name};
+
+            // If the stack of open elements does not have an element in scope that is an HTML element with the same tag name
+            // as that of the token,
+            if (not _hasElementInScope(qualifiedName)) {
+                // then this is a parse error; ignore the token.
+                _raise(diags, t.span, "unexpected end tag");
+                return;
+            }
+
+            // Otherwise, run these steps:
+
+            // 1. Generate implied end tags, except for HTML elements with the same tag name as the token.
+            _generateImpliedEndTags(*this, qualifiedName);
+
+            // 2. If the current node is not an HTML element with the same tag name as that of the token, then this is a parse error.
+            if (_currentElement()->qualifiedName != qualifiedName) {
+                _raise(diags, t.span, "unexpected end tag");
+            }
+
+            // 3. Pop elements from the stack of open elements until an HTML element with the same tag name as the token has been popped from the stack.
+            _openElements.popUntilOneOf(qualifiedName);
+        }
 
         // An end tag whose tag name is one of: "h1", "h2", "h3", "h4", "h5", "h6"
         else if (
             t.type == HtmlToken::END_TAG and
-            (t.name == "h1" or t.name == "h2" or t.name == "h3" or t.name == "h4" or
-             t.name == "h5" or t.name == "h6")
+            oneOf(t.name, "h1", "h2", "h3", "h4", "h5", "h6")
         ) {
             // If the stack of open elements does not have an element in scope that is an HTML element and whose tag name is
             // one of "h1", "h2", "h3", "h4", "h5", or "h6",
@@ -1325,7 +1807,7 @@ export struct HtmlParser : HtmlSink {
                 not _hasElementInScope(Html::H5_TAG) and
                 not _hasElementInScope(Html::H6_TAG)) {
                 // then this is a parse error; ignore the token.
-                _raise("unexpected end tag for h1-h6");
+                _raise(diags, t.span, "unexpected end tag for h1-h6");
                 return;
             }
 
@@ -1337,25 +1819,16 @@ export struct HtmlParser : HtmlSink {
             // 2. If the current node is not an HTML element with the same tag name as that of the token, then this is a parse error.
             if (_currentElement()->qualifiedName != Dom::QualifiedName{Html::NAMESPACE, t.name}) {
                 // then this is a parse error.
-                _raise("unexpected end tag for h1-h6");
+                _raise(diags, t.span, "unexpected end tag for h1-h6");
             }
 
             // 3. Pop elements from the stack of open elements until an HTML element whose tag name is one of "h1", "h2",
             // "h3", "h4", "h5", or "h6" has been popped from the stack.
-            while (Karm::any(_openElements)) {
-                auto poppedEl = _openElements.popBack();
-                if (
-                    poppedEl->qualifiedName == Html::H1_TAG or poppedEl->qualifiedName == Html::H2_TAG or
-                    poppedEl->qualifiedName == Html::H3_TAG or poppedEl->qualifiedName == Html::H4_TAG or
-                    poppedEl->qualifiedName == Html::H5_TAG or poppedEl->qualifiedName == Html::H6_TAG
-                )
-                    break;
-            }
+            _openElements.popUntilOneOf(Html::H1_TAG, Html::H2_TAG, Html::H3_TAG, Html::H4_TAG, Html::H5_TAG, Html::H6_TAG);
         }
 
-        // TODO: An end tag whose tag name is "sarcasm"
-        //       This state machine is not equipped to handle sarcasm
-        //       So we just ignore it
+        // An end tag whose tag name is "sarcasm"
+        // Take a deep breath, then act as described in the "any other end tag" entry below.
 
         // TODO: A start tag whose tag name is "a"
 
@@ -1393,7 +1866,7 @@ export struct HtmlParser : HtmlSink {
         ) {
             if (t.type == HtmlToken::END_TAG) {
                 // Parse error.
-                _raise("unexpected end tag for br");
+                _raise(diags, t.span, "unexpected end tag for br");
 
                 // Drop the attributes from the token, and act as described in the next entry; i.e. act as if
                 // this was a "br" start tag token with no attributes, rather than the end tag token that it actually is.
@@ -1405,7 +1878,7 @@ export struct HtmlParser : HtmlSink {
 
             // Insert an HTML element for the token. Immediately pop the current node off the stack of open elements.
             _insertHtmlElement(t);
-            _openElements.popBack();
+            _openElements.pop();
 
             // Acknowledge the token's self-closing flag, if it is set.
             _acknowledgeSelfClosingFlag(t);
@@ -1416,11 +1889,12 @@ export struct HtmlParser : HtmlSink {
 
         // A start tag whose tag name is "input"
         else if (t.type == HtmlToken::START_TAG and t.name == "input") {
-            // TODO: Reconstruct the active formatting elements, if any.
+            // Reconstruct the active formatting elements, if any.
+            _reconstructActiveFormattingElements();
 
             // Insert an HTML element for the token. Immediately pop the current node off the stack of open elements.
             _insertHtmlElement(t);
-            _openElements.popBack();
+            _openElements.pop();
 
             // Acknowledge the token's self-closing flag, if it is set.
             _acknowledgeSelfClosingFlag(t);
@@ -1450,10 +1924,13 @@ export struct HtmlParser : HtmlSink {
         // A start tag whose tag name is "hr"
         else if (t.type == HtmlToken::START_TAG and t.name == "hr") {
             // If the stack of open elements has a p element in button scope, then close a p element.
-            closePElementIfInButtonScope();
+            if (_hasElementInButtonScope(Html::P_TAG)) {
+                closePElement();
+            }
+
             // Insert an HTML element for the token. Immediately pop the current node off the stack of open elements.
             _insertHtmlElement(t);
-            _openElements.popBack();
+            _openElements.pop();
             // Acknowledge the token's self-closing flag, if it is set.
             _acknowledgeSelfClosingFlag(t);
 
@@ -1501,7 +1978,7 @@ export struct HtmlParser : HtmlSink {
             // If the token has its self-closing flag set, pop the current node
             // off the stack of open elements and acknowledge the token's self-closing flag.
             if (t.selfClosing) {
-                _openElements.popBack();
+                _openElements.pop();
                 _acknowledgeSelfClosingFlag(t);
             }
         }
@@ -1514,7 +1991,7 @@ export struct HtmlParser : HtmlSink {
              t.name == "th" or t.name == "thead" or t.name == "tr")
         ) {
             // Parse error. Ignore the token.
-            _raise("unexpected start tag");
+            _raise(diags, t.span, "unexpected start tag");
         }
 
         else if (t.type == HtmlToken::START_TAG) {
@@ -1537,13 +2014,13 @@ export struct HtmlParser : HtmlSink {
 
                     // 2. If node is not the current node, then this is a parse error.
                     if (node != _currentElement())
-                        _raise("unexpected end tag");
+                        _raise(diags, t.span, "unexpected end tag");
 
                     // 3. Pop all the nodes from the current node up to node, including node, then stop these steps
                     while (_currentElement() != node) {
-                        _openElements.popBack();
+                        _openElements.pop();
                     }
-                    _openElements.popBack();
+                    _openElements.pop();
                     break;
                 }
 
@@ -1562,7 +2039,7 @@ export struct HtmlParser : HtmlSink {
 
     // 13.2.6.4.8 MARK: The "text" insertion mode
     // https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-incdata
-    void _handleText(HtmlToken const& t) {
+    void _handleText(HtmlToken const& t, Diag::Collector& diags) {
         // A character token
         if (t.type == HtmlToken::CHARACTER) {
             _insertACharacter(
@@ -1573,11 +2050,11 @@ export struct HtmlParser : HtmlSink {
         }
 
         else if (t.type == HtmlToken::END_OF_FILE) {
-            _raise("unexpected end of file");
+            _raise(diags, t.span, "unexpected end of file");
 
             // TODO: If the current node is a script element, then set its already started to true.
 
-            _openElements.popBack();
+            _openElements.pop();
             _switchTo(_originalInsertionMode);
         }
 
@@ -1588,7 +2065,7 @@ export struct HtmlParser : HtmlSink {
 
         // Any other end tag
         else if (t.type == HtmlToken::END_TAG) {
-            this->_openElements.popBack();
+            this->_openElements.pop();
             _switchTo(_originalInsertionMode);
         }
 
@@ -1597,27 +2074,27 @@ export struct HtmlParser : HtmlSink {
 
     // 13.2.6.4.9 MARK: The "in table" insertion mode
     // https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-intable
-    void _inTableModeAnythingElse(HtmlToken& t) {
+    void _inTableModeAnythingElse(HtmlToken& t, Diag::Collector& diags) {
         // Parse error.
-        _raise("unexpected token");
+        _raise(diags, t.span, "unexpected token");
 
         // Enable foster parenting,
         _fosterParenting = true;
 
         // process the token using the rules for the "in body" insertion mode,
-        _acceptIn(HtmlParser::Mode::IN_BODY, t);
+        _acceptIn(HtmlParser::Mode::IN_BODY, t, diags);
 
         // and then disable foster parenting.
         _fosterParenting = false;
     }
 
-    void _handleInTable(HtmlToken& t) {
+    void _handleInTable(HtmlToken& t, Diag::Collector& diags) {
         auto _clearTheStackBackToATableContext = [&]() {
             while (_currentElement()->qualifiedName != Html::TABLE_TAG and
                    _currentElement()->qualifiedName != Html::TEMPLATE_TAG and
                    _currentElement()->qualifiedName != Html::HTML_TAG) {
 
-                _openElements.popBack();
+                _openElements.pop();
             }
         };
 
@@ -1634,7 +2111,7 @@ export struct HtmlParser : HtmlSink {
 
             // Switch the insertion mode to "in table text" and reprocess the token.
             _switchTo(Mode::IN_TABLE_TEXT);
-            accept(t);
+            accept(t, diags);
         }
 
         // A comment token
@@ -1646,7 +2123,7 @@ export struct HtmlParser : HtmlSink {
         // A DOCTYPE token
         else if (t.type == HtmlToken::DOCTYPE) {
             // Parse error. Ignore the token.
-            _raise("unexpected DOCTYPE token");
+            _raise(diags, t.span, "unexpected DOCTYPE token");
         }
 
         // A start tag whose tag name is "caption"
@@ -1684,7 +2161,7 @@ export struct HtmlParser : HtmlSink {
             _switchTo(Mode::IN_COLUMN_GROUP);
 
             // Reprocess the current token.
-            accept(t);
+            accept(t, diags);
         }
 
         // A start tag whose tag name is one of: "tbody", "tfoot", "thead"
@@ -1712,13 +2189,13 @@ export struct HtmlParser : HtmlSink {
             _switchTo(Mode::IN_TABLE_BODY);
 
             // Reprocess the current token.
-            accept(t);
+            accept(t, diags);
         }
 
         // A start tag whose tag name is "table"
         else if (t.type == HtmlToken::START_TAG and t.name == "table") {
             // Parse error.
-            _raise("unexpected table start tag");
+            _raise(diags, t.span, "unexpected table start tag");
 
             // If the stack of open elements does not have a table element in table scope, ignore the token.
             if (not _hasElementInTableScope(Html::TABLE_TAG))
@@ -1727,15 +2204,13 @@ export struct HtmlParser : HtmlSink {
             // Otherwise:
 
             // Pop elements from this stack until a table element has been popped from the stack.
-            while (Karm::any(_openElements) and _openElements.popBack()->qualifiedName != Html::TABLE_TAG) {
-                // do nothing
-            }
+            _openElements.popUntilOneOf(Html::TABLE_TAG);
 
             // Reset the insertion mode appropriately.
             _resetTheInsertionModeAppropriately();
 
             // Reprocess the token.
-            accept(t);
+            accept(t, diags);
         }
 
         // An end tag whose tag name is "table"
@@ -1743,14 +2218,12 @@ export struct HtmlParser : HtmlSink {
             // If the stack of open elements does not have a table element in table scope, this is a parse error;
             // ignore the token.
             if (not _hasElementInTableScope(Html::TABLE_TAG)) {
-                _raise("unexpected table end tag");
+                _raise(diags, t.span, "unexpected table end tag");
                 return;
             }
 
             // Pop elements from this stack until a table element has been popped from the stack.
-            while (Karm::any(_openElements) and _openElements.popBack()->qualifiedName != Html::TABLE_TAG) {
-                // do nothing
-            }
+            _openElements.popUntilOneOf(Html::TABLE_TAG);
 
             // Reset the insertion mode appropriately.
             _resetTheInsertionModeAppropriately();
@@ -1763,20 +2236,20 @@ export struct HtmlParser : HtmlSink {
                   t.name == "td" or t.name == "tfoot" or t.name == "th" or
                   t.name == "thead" or t.name == "tr")) {
             // Parse error. Ignore the token.
-            _raise("unexpected end tag");
+            _raise(diags, t.span, "unexpected end tag");
         }
 
         // A start tag whose tag name is one of: "style", "script", "template"
         else if (t.type == HtmlToken::START_TAG and
                  (t.name == "style" or t.name == "script" or t.name == "template")) {
             // Process the token using the rules for the "in head" insertion mode.
-            _acceptIn(Mode::IN_HEAD, t);
+            _acceptIn(Mode::IN_HEAD, t, diags);
         }
 
         // An end tag whose tag name is "template"
         else if (t.type == HtmlToken::END_TAG and t.name == "template") {
             // Process the token using the rules for the "in head" insertion mode.
-            _acceptIn(Mode::IN_HEAD, t);
+            _acceptIn(Mode::IN_HEAD, t, diags);
         }
 
         // A start tag whose tag name is "input"
@@ -1798,18 +2271,18 @@ export struct HtmlParser : HtmlSink {
 
             // then: act as described in the "anything else" entry below.
             if (hasHiddenAsTypeAttrValue) {
-                _inTableModeAnythingElse(t);
+                _inTableModeAnythingElse(t, diags);
                 return;
             }
 
             // Parse error.
-            _raise("unexpected input start tag");
+            _raise(diags, t.span, "unexpected input start tag");
 
             // Insert an HTML element for the token.
             _insertHtmlElement(t);
 
             // Pop that input element off the stack of open elements.
-            _openElements.popBack();
+            _openElements.pop();
 
             // Acknowledge the token's self-closing flag, if it is set.
             _acknowledgeSelfClosingFlag(t);
@@ -1818,15 +2291,10 @@ export struct HtmlParser : HtmlSink {
         // A start tag whose tag name is "form"
         else if (t.type == HtmlToken::START_TAG and t.name == "form") {
             // Parse error.
-            _raise("unexpected form start tag");
+            _raise(diags, t.span, "unexpected form start tag");
 
             // If there is a template element on the stack of open elements, or if the form element pointer is not null, ignore the token.
-            for (auto& el : _openElements) {
-                if (el->qualifiedName == Html::TEMPLATE_TAG)
-                    return;
-            }
-
-            if (not _formElement)
+            if (_openElements.contains(Html::TEMPLATE_TAG) or _formElement)
                 return;
 
             // Insert an HTML element for the token, and set the form element pointer to point to the element created.
@@ -1837,29 +2305,29 @@ export struct HtmlParser : HtmlSink {
             _formElement = _insertAForeignElement(formToken, Html::NAMESPACE, false);
 
             // Pop that form element off the stack of open elements.
-            _openElements.popBack();
+            _openElements.pop();
         }
 
         // An end-of-file token
         else if (t.type == HtmlToken::END_OF_FILE) {
             // Process the token using the rules for the "in body" insertion mode.
-            _acceptIn(Mode::IN_BODY, t);
+            _acceptIn(Mode::IN_BODY, t, diags);
         }
 
         // Anything else
         else {
-            _inTableModeAnythingElse(t);
+            _inTableModeAnythingElse(t, diags);
         }
     }
 
     // 13.2.6.4.10 MARK: The "in table text" insertion mode
     // https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-intabletext
-    void _handleInTableText(HtmlToken& t) {
+    void _handleInTableText(HtmlToken& t, Diag::Collector& diags) {
 
         // A character token that is U+0000 NULL
         if (t.type == HtmlToken::CHARACTER and t.rune == '\0') {
             // Parse error. Ignore the token.
-            _raise("unexpected NULL character token in table text");
+            _raise(diags, t.span, "unexpected NULL character token in table text");
         }
 
         // Any other character token
@@ -1887,7 +2355,7 @@ export struct HtmlParser : HtmlSink {
                 // reprocess the character tokens in the pending table character tokens list using the rules given in
                 // the "anything else" entry in the "in table" insertion mode.
                 for (auto& token : _pendingTableCharacterTokens) {
-                    _inTableModeAnythingElse(token);
+                    _inTableModeAnythingElse(token, diags);
                 }
             } else {
                 // Otherwise, insert the characters given by the pending table character tokens list.
@@ -1898,18 +2366,18 @@ export struct HtmlParser : HtmlSink {
 
             // Switch the insertion mode to the original insertion mode and reprocess the token.
             _switchTo(_originalInsertionMode);
-            accept(t);
+            accept(t, diags);
         }
     }
 
     // 13.2.6.4.11 MARK: The "in caption" insertion mode
     // https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-incaption
-    void _handleInCaption(HtmlToken& t) {
+    void _handleInCaption(HtmlToken& t, Diag::Collector& diags) {
         auto _closeTheCaption = [&]() {
             // If the stack of open elements does not have a caption element in table scope,
             if (not _hasElementInTableScope(Html::CAPTION_TAG)) {
                 // this is a parse error; ignore the token. (fragment case)
-                _raise("unexpected caption end tag");
+                _raise(diags, t.span, "unexpected caption end tag");
                 return false;
             }
 
@@ -1920,12 +2388,10 @@ export struct HtmlParser : HtmlSink {
 
             // Now, if the current node is not a caption element, then this is a parse error.
             if (_currentElement()->qualifiedName != Html::CAPTION_TAG)
-                _raise("unexpected caption end tag");
+                _raise(diags, t.span, "unexpected caption end tag");
 
             // Pop elements from this stack until a caption element has been popped from the stack.
-            while (Karm::any(_openElements) and _openElements.popBack()->qualifiedName != Html::CAPTION_TAG) {
-                // do nothing
-            }
+            _openElements.popUntilOneOf(Html::CAPTION_TAG);
 
             // TODO: Clear the list of active formatting elements up to the last marker.
 
@@ -1950,7 +2416,7 @@ export struct HtmlParser : HtmlSink {
         ) {
             if (_closeTheCaption()) {
                 // Reprocess the token.
-                accept(t);
+                accept(t, diags);
             }
         }
 
@@ -1959,19 +2425,19 @@ export struct HtmlParser : HtmlSink {
                  (t.name == "body" or t.name == "col" or t.name == "colgroup" or t.name == "html" or t.name == "tbody" or
                   t.name == "td" or t.name == "tfoot" or t.name == "th" or t.name == "thead" or t.name == "tr")) {
             // Parse error. Ignore the token.
-            _raise("unexpected end tag");
+            _raise(diags, t.span, "unexpected end tag");
         }
 
         // Anything else
         else {
             // Process the token using the rules for the "in body" insertion mode.
-            _acceptIn(Mode::IN_BODY, t);
+            _acceptIn(Mode::IN_BODY, t, diags);
         }
     }
 
     // 13.2.6.4.12 MARK: The "in column group" insertion modeMARK:
     // https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-incolgroup
-    void _handleInColumnGroup(HtmlToken& t) {
+    void _handleInColumnGroup(HtmlToken& t, Diag::Collector& diags) {
         // A character token that is one of U+0009 CHARACTER TABULATION, U+000A LINE FEED (LF), U+000C FORM FEED (FF),
         // U+000D CARRIAGE RETURN (CR), or U+0020 SPACE
         if (
@@ -1991,13 +2457,13 @@ export struct HtmlParser : HtmlSink {
         // A DOCTYPE token
         else if (t.type == HtmlToken::DOCTYPE) {
             // Parse error. Ignore the token.
-            _raise("unexpected DOCTYPE token");
+            _raise(diags, t.span, "unexpected DOCTYPE token");
         }
 
         // A start tag whose tag name is "html"
         else if (t.type == HtmlToken::START_TAG and t.name == "html") {
             // Process the token using the rules for the "in body" insertion mode.
-            _acceptIn(Mode::IN_BODY, t);
+            _acceptIn(Mode::IN_BODY, t, diags);
         }
 
         // A start tag whose tag name is "col"
@@ -2006,7 +2472,7 @@ export struct HtmlParser : HtmlSink {
             _insertHtmlElement(t);
 
             // Immediately pop the current node off the stack of open elements.
-            _openElements.popBack();
+            _openElements.pop();
 
             // Acknowledge the token's self-closing flag, if it is set.
             _acknowledgeSelfClosingFlag(t);
@@ -2017,13 +2483,13 @@ export struct HtmlParser : HtmlSink {
             // If the current node is not a colgroup element,
             if (_currentElement()->qualifiedName != Html::COLGROUP_TAG) {
                 // then this is a parse error;
-                _raise("unexpected colgroup end tag");
+                _raise(diags, t.span, "unexpected colgroup end tag");
                 // ignore the token.
                 return;
             }
 
             // Otherwise, pop the current node from the stack of open elements.
-            _openElements.popBack();
+            _openElements.pop();
 
             // Switch the insertion mode to "in table".
             _switchTo(Mode::IN_TABLE);
@@ -2032,20 +2498,20 @@ export struct HtmlParser : HtmlSink {
         // An end tag whose tag name is "col"
         else if (t.type == HtmlToken::END_TAG and t.name == "col") {
             // Parse error. Ignore the token.
-            _raise("unexpected col end tag");
+            _raise(diags, t.span, "unexpected col end tag");
         }
 
         // A start tag whose tag name is "template"
         // An end tag whose tag name is "template"
         else if ((t.type == HtmlToken::START_TAG or t.type == HtmlToken::END_TAG) and t.name == "template") {
             // Process the token using the rules for the "in head" insertion mode.
-            _acceptIn(Mode::IN_HEAD, t);
+            _acceptIn(Mode::IN_HEAD, t, diags);
         }
 
         // An end-of-file token
         else if (t.type == HtmlToken::END_OF_FILE) {
             // Process the token using the rules for the "in body" insertion mode.
-            _acceptIn(Mode::IN_BODY, t);
+            _acceptIn(Mode::IN_BODY, t, diags);
         }
 
         // Anything else
@@ -2053,24 +2519,24 @@ export struct HtmlParser : HtmlSink {
             // If the current node is not a colgroup element,
             if (_currentElement()->qualifiedName != Html::COLGROUP_TAG) {
                 // then this is a parse error; ignore the token.
-                _raise("unexpected token in column group");
+                _raise(diags, t.span, "unexpected token in column group");
                 return;
             }
 
             // Otherwise, pop the current node from the stack of open elements.
-            _openElements.popBack();
+            _openElements.pop();
 
             // Switch the insertion mode to "in table".
             _switchTo(Mode::IN_TABLE);
 
             // Reprocess the token.
-            accept(t);
+            accept(t, diags);
         }
     }
 
     // 13.2.6.4.13 MARK: The "in table body" insertion mode
     // https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-intbody
-    void _handleInTableBody(HtmlToken& t) {
+    void _handleInTableBody(HtmlToken& t, Diag::Collector& diags) {
         auto _clearTheStackBackToATableBodyContext = [&]() {
             while (
                 _currentElement()->qualifiedName != Html::TBODY_TAG and
@@ -2079,7 +2545,7 @@ export struct HtmlParser : HtmlSink {
                 _currentElement()->qualifiedName != Html::TEMPLATE_TAG and
                 _currentElement()->qualifiedName != Html::HTML_TAG
             ) {
-                _openElements.popBack();
+                _openElements.pop();
             }
         };
 
@@ -2095,7 +2561,7 @@ export struct HtmlParser : HtmlSink {
 
         // A start tag whose tag name is one of: "th", "td"
         else if (t.type == HtmlToken::START_TAG and (t.name == "th" or t.name == "td")) {
-            _raise("unexpected th/td start tag");
+            _raise(diags, t.span, "unexpected th/td start tag");
 
             // Clear the stack back to a table body context. (See below.)
             _clearTheStackBackToATableBodyContext();
@@ -2108,14 +2574,14 @@ export struct HtmlParser : HtmlSink {
 
             _switchTo(Mode::IN_ROW);
 
-            accept(t);
+            accept(t, diags);
         }
 
         else if (t.type == HtmlToken::END_TAG and (t.name == "tbody" or t.name == "tfoot" or t.name == "thead")) {
             // If the stack of open elements does not have an element in table scope that is an HTML element with the same
             // tag name as the token, this is a parse error; ignore the token.
             if (not _hasElementInTableScope(Dom::QualifiedName{Html::NAMESPACE, t.name})) {
-                _raise("unexpected end tag");
+                _raise(diags, t.span, "unexpected end tag");
                 return;
             }
 
@@ -2123,7 +2589,7 @@ export struct HtmlParser : HtmlSink {
             _clearTheStackBackToATableBodyContext();
 
             // Pop the current node from the stack of open elements. Switch the insertion mode to "in table".
-            _openElements.popBack();
+            _openElements.pop();
             _switchTo(Mode::IN_TABLE);
         }
 
@@ -2140,7 +2606,7 @@ export struct HtmlParser : HtmlSink {
                 not _hasElementInTableScope(Html::THEAD_TAG) and
                 not _hasElementInTableScope(Html::TFOOT_TAG)) {
                 // this is a parse error; ignore the token.
-                _raise("unexpected start tag or end tag");
+                _raise(diags, t.span, "unexpected start tag or end tag");
                 return;
             }
 
@@ -2150,11 +2616,11 @@ export struct HtmlParser : HtmlSink {
             _clearTheStackBackToATableBodyContext();
 
             // Pop the current node from the stack of open elements. Switch the insertion mode to "in table".
-            _openElements.popBack();
+            _openElements.pop();
             _switchTo(Mode::IN_TABLE);
 
             // Reprocess the token.
-            accept(t);
+            accept(t, diags);
         }
 
         // An end tag whose tag name is one of: "body", "caption", "col", "colgroup", "html", "td", "th", "tr"
@@ -2165,25 +2631,25 @@ export struct HtmlParser : HtmlSink {
              t.name == "td" or t.name == "th" or t.name == "tr")
         ) {
             // Parse error. Ignore the token.
-            _raise("unexpected end tag");
+            _raise(diags, t.span, "unexpected end tag");
         }
 
         // Anything else
         else {
             // Process the token using the rules for the "in table" insertion mode.
-            _acceptIn(Mode::IN_TABLE, t);
+            _acceptIn(Mode::IN_TABLE, t, diags);
         }
     }
 
     // 13.2.6.4.14 MARK: The "in row" insertion mode
     // https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-intr
-    void _handleInTableRow(HtmlToken& t) {
+    void _handleInTableRow(HtmlToken& t, Diag::Collector& diags) {
         auto _clearTheStackBackToATableRowContext = [&]() {
             while (_currentElement()->qualifiedName != Html::TR_TAG and
                    _currentElement()->qualifiedName != Html::TEMPLATE_TAG and
                    _currentElement()->qualifiedName != Html::HTML_TAG) {
 
-                _openElements.popBack();
+                _openElements.pop();
             }
         };
 
@@ -2202,7 +2668,7 @@ export struct HtmlParser : HtmlSink {
         // An end tag whose tag name is "tr"
         else if (t.type == HtmlToken::END_TAG and t.name == "tr") {
             if (not _hasElementInTableScope(Html::TR_TAG)) {
-                _raise("unexpected tr end tag");
+                _raise(diags, t.span, "unexpected tr end tag");
                 return;
             }
 
@@ -2212,7 +2678,7 @@ export struct HtmlParser : HtmlSink {
             _clearTheStackBackToATableRowContext();
 
             // Pop the current node (which will be a tr element) from the stack of open elements.
-            _openElements.popBack();
+            _openElements.pop();
 
             // Switch the insertion mode to "in table body".
             _switchTo(Mode::IN_TABLE_BODY);
@@ -2228,7 +2694,7 @@ export struct HtmlParser : HtmlSink {
             // If the stack of open elements does not have a tr element in table scope,
             if (not _hasElementInTableScope(Html::TR_TAG)) {
                 // this is a parse error; ignore the token.
-                _raise("unexpected start/end tag");
+                _raise(diags, t.span, "unexpected start/end tag");
                 return;
             }
 
@@ -2238,13 +2704,13 @@ export struct HtmlParser : HtmlSink {
             _clearTheStackBackToATableRowContext();
 
             // Pop the current node (which will be a tr element) from the stack of open elements.
-            _openElements.popBack();
+            _openElements.pop();
 
             // Switch the insertion mode to "in table body".
             _switchTo(Mode::IN_TABLE_BODY);
 
             // Reprocess the token.
-            accept(t);
+            accept(t, diags);
         }
 
         // An end tag whose tag name is one of: "tbody", "tfoot", "thead"
@@ -2254,7 +2720,7 @@ export struct HtmlParser : HtmlSink {
 
             if (not _hasElementInTableScope(Dom::QualifiedName{Html::NAMESPACE, t.name})) {
                 // this is a parse error; ignore the token.
-                _raise("unexpected end tag");
+                _raise(diags, t.span, "unexpected end tag");
                 return;
             }
 
@@ -2262,13 +2728,13 @@ export struct HtmlParser : HtmlSink {
             _clearTheStackBackToATableRowContext();
 
             // Pop the current node (which will be a tr element) from the stack of open elements.
-            _openElements.popBack();
+            _openElements.pop();
 
             // Switch the insertion mode to "in table body".
             _switchTo(Mode::IN_TABLE_BODY);
 
             // Reprocess the token.
-            accept(t);
+            accept(t, diags);
         }
 
         // An end tag whose tag name is one of: "body", "caption", "col", "colgroup", "html", "td", "th"
@@ -2277,33 +2743,29 @@ export struct HtmlParser : HtmlSink {
                   t.name == "colgroup" or t.name == "html" or
                   t.name == "td" or t.name == "th")) {
             // Parse error. Ignore the token.
-            _raise("unexpected end tag");
+            _raise(diags, t.span, "unexpected end tag");
         }
 
         else {
             // Process the token using the rules for the "in table" insertion mode.
-            _acceptIn(Mode::IN_TABLE, t);
+            _acceptIn(Mode::IN_TABLE, t, diags);
         }
     }
 
     // 13.2.6.4.15 MARK: The "in cell" insertion mode
     // https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-intd
-    void _handleInCell(HtmlToken& t) {
+    void _handleInCell(HtmlToken& t, Diag::Collector& diags) {
         auto _closeTheCell = [&]() {
             // Generate implied end tags.
             _generateImpliedEndTags(*this);
 
             // If the current node is not now a td element or a th element, then this is a parse error.
             if (_currentElement()->qualifiedName != Html::TD_TAG and _currentElement()->qualifiedName != Html::TH_TAG) {
-                _raise("unexpected end tag");
+                _raise(diags, t.span, "unexpected end tag");
             }
 
             // Pop elements from the stack of open elements until a td element or a th element has been popped from the stack.
-            while (Karm::any(_openElements)) {
-                auto poppedEl = _openElements.popBack();
-                if (poppedEl->qualifiedName == Html::TD_TAG or poppedEl->qualifiedName == Html::TH_TAG)
-                    break;
-            }
+            _openElements.popUntilOneOf(Html::TD_TAG, Html::TH_TAG);
 
             // TODO: Clear the list of active formatting elements up to the last marker.
 
@@ -2319,7 +2781,7 @@ export struct HtmlParser : HtmlSink {
 
             if (not _hasElementInTableScope(tokenQualifiedName)) {
                 // this is a parse error; ignore the token.
-                _raise("unexpected end tag");
+                _raise(diags, t.span, "unexpected end tag");
                 return;
             }
 
@@ -2331,14 +2793,12 @@ export struct HtmlParser : HtmlSink {
             // Now, if the current node is not an HTML element with the same tag name as the token,
             if (_currentElement()->qualifiedName != tokenQualifiedName) {
                 // then this is a parse error.
-                _raise("unexpected end tag");
+                _raise(diags, t.span, "unexpected end tag");
             }
 
             // Pop elements from the stack of open elements until an HTML element with the same tag name as
             // the token has been popped from the stack.
-            while (Karm::any(_openElements) and _openElements.popBack()->qualifiedName != tokenQualifiedName) {
-                // do nothing
-            }
+            _openElements.popUntilOneOf(tokenQualifiedName);
 
             // TODO: Clear the list of active formatting elements up to the last marker.
 
@@ -2354,13 +2814,13 @@ export struct HtmlParser : HtmlSink {
 
             // Assert: The stack of open elements has a td or th element in table scope.
             if (not _hasElementInTableScope(Html::TD_TAG) and not _hasElementInTableScope(Html::TR_TAG)) {
-                _raise("unexpected start tag");
+                _raise(diags, t.span, "unexpected start tag");
                 // FIXME: should this be a panic()?
             }
 
             // Close the cell (see below) and reprocess the token.
             _closeTheCell();
-            accept(t);
+            accept(t, diags);
         }
 
         // An end tag whose tag name is one of: "body", "caption", "col", "colgroup", "html"
@@ -2368,7 +2828,7 @@ export struct HtmlParser : HtmlSink {
                  (t.name == "body" or t.name == "caption" or t.name == "col" or
                   t.name == "colgroup" or t.name == "html")) {
             // Parse error. Ignore the token.
-            _raise("unexpected end tag");
+            _raise(diags, t.span, "unexpected end tag");
         }
 
         // An end tag whose tag name is one of: "table", "tbody", "tfoot", "thead", "tr"
@@ -2379,24 +2839,24 @@ export struct HtmlParser : HtmlSink {
             // tag name as the token,
             if (not _hasElementInTableScope(Dom::QualifiedName{Html::NAMESPACE, t.name})) {
                 // this is a parse error; ignore the token.
-                _raise("unexpected end tag");
+                _raise(diags, t.span, "unexpected end tag");
                 return;
             }
 
             // Otherwise, close the cell (see below) and reprocess the token.
             _closeTheCell();
-            accept(t);
+            accept(t, diags);
         }
 
         else {
             // Process the token using the rules for the "in body" insertion mode.
-            _acceptIn(Mode::IN_BODY, t);
+            _acceptIn(Mode::IN_BODY, t, diags);
         }
     }
 
     // 3.2.6.4.22 MARK: The "after after body" insertion mode
     // https://html.spec.whatwg.org/multipage/parsing.html#the-after-after-body-insertion-mode
-    void _handleAfterBody(HtmlToken& t) {
+    void _handleAfterBody(HtmlToken& t, Diag::Collector& diags) {
         // A comment token
         if (t.type == HtmlToken::COMMENT) {
             // Insert a comment.
@@ -2410,7 +2870,7 @@ export struct HtmlParser : HtmlSink {
                  (t.type == HtmlToken::CHARACTER and (t.rune == '\t' or t.rune == '\n' or t.rune == '\f' or t.rune == '\r' or t.rune == ' ')) or
                  (t.type == HtmlToken::START_TAG and t.name == "html")) {
             // Process the token using the rules for the "in body" insertion mode.
-            _acceptIn(Mode::IN_BODY, t);
+            _acceptIn(Mode::IN_BODY, t, diags);
         }
 
         else if (t.type == HtmlToken::END_OF_FILE) {
@@ -2419,20 +2879,20 @@ export struct HtmlParser : HtmlSink {
 
         else {
             // Parse error. Switch the insertion mode to "in body" and reprocess the token.
-            _raise("unexpected token");
+            _raise(diags, t.span, "unexpected token");
             _switchTo(Mode::IN_BODY);
-            accept(t);
+            accept(t, diags);
         }
     }
 
     // 13.2.6.5 MARK: The rules for parsing tokens in foreign content
     // https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inforeign
-    void _handleInForeignContent(HtmlToken& t) {
+    void _handleInForeignContent(HtmlToken& t, Diag::Collector& diags) {
         auto handleScript = [&] {
             // TODO
 
             // Pop the current node off the stack of open elements.
-            _openElements.popBack();
+            _openElements.pop();
 
             // Let the old insertion point have the same value as the current insertion point. Let the insertion point be just before the next input character.
 
@@ -2450,7 +2910,7 @@ export struct HtmlParser : HtmlSink {
         // A character token that is U+0000 NULL
         if (t.type == HtmlToken::CHARACTER and t.rune == '\0') {
             // Parse error. Insert a U+FFFD REPLACEMENT CHARACTER character.
-            _raise("unexpected NULL character token");
+            _raise(diags, t.span, "unexpected NULL character token");
             _insertACharacter(0xFFFD);
         }
 
@@ -2483,7 +2943,7 @@ export struct HtmlParser : HtmlSink {
         // A DOCTYPE token
         else if (t.type == HtmlToken::DOCTYPE) {
             // Parse error. Ignore the token.
-            _raise("unexpected DOCTYPE token");
+            _raise(diags, t.span, "unexpected DOCTYPE token");
         }
 
         // A start tag whose tag name is one of: "b", "big", "blockquote", "body", "br", "center", "code", "dd", "div", "dl", "dt", "em", "embed", "h1", "h2", "h3", "h4", "h5", "h6", "head", "hr", "i", "img", "li", "listing", "menu", "meta", "nobr", "ol", "p", "pre", "ruby", "s", "small", "span", "strong", "strike", "sub", "sup", "table", "tt", "u", "ul", "var"
@@ -2495,7 +2955,7 @@ export struct HtmlParser : HtmlSink {
             (t.type == HtmlToken::END_TAG and (t.name == "br" or t.name == "p"))
         ) {
             // Parse error.
-            _raise("unexpected foreign content start tag");
+            _raise(diags, t.span, "unexpected foreign content start tag");
 
             while (_openElements.len()) {
                 auto el = _currentElement();
@@ -2510,12 +2970,12 @@ export struct HtmlParser : HtmlSink {
                 }
 
                 // pop elements from the stack of open elements.
-                _openElements.popBack();
+                _openElements.pop();
             }
 
             // Reprocess the token according to the rules given in the section
             // corresponding to the current insertion mode in HTML content.
-            accept(t);
+            accept(t, diags);
         }
 
         // Any other start tag
@@ -2553,7 +3013,7 @@ export struct HtmlParser : HtmlSink {
                 // Otherwise
                 else {
                     // Pop the current node off the stack of open elements and acknowledge the token's self-closing flag.
-                    _openElements.popBack();
+                    _openElements.pop();
                     _acknowledgeSelfClosingFlag(t);
                 }
             }
@@ -2570,7 +3030,7 @@ export struct HtmlParser : HtmlSink {
 
             // If node's tag name, converted to ASCII lowercase, is not the same as the tag name of the token, then this is a parse error.
             if (not eqCi(_currentElement()->qualifiedName.name.str(), t.name.str())) {
-                _raise("unexpected end tag");
+                _raise(diags, t.span, "unexpected end tag");
             }
 
             usize curr = _openElements.len();
@@ -2584,9 +3044,9 @@ export struct HtmlParser : HtmlSink {
                 if (eqCi(node->qualifiedName.name.str(), t.name.str())) {
                     // pop elements from the stack of open elements until node has been popped from the stack, and then return.
                     while (_currentElement() != node) {
-                        _openElements.popBack();
+                        _openElements.pop();
                     }
-                    _openElements.popBack();
+                    _openElements.pop();
                     return;
                 }
 
@@ -2599,7 +3059,7 @@ export struct HtmlParser : HtmlSink {
                     continue;
 
                 // Otherwise, process the token according to the rules given in the section corresponding to the current insertion mode in HTML content.
-                _acceptIn(_insertionMode, t);
+                _acceptIn(_insertionMode, t, diags);
                 break;
             }
         }
@@ -2609,70 +3069,70 @@ export struct HtmlParser : HtmlSink {
         _insertionMode = mode;
     }
 
-    void _acceptIn(Mode mode, HtmlToken& t) {
+    void _acceptIn(Mode mode, HtmlToken& t, Diag::Collector& diags) {
         if (t.type != HtmlToken::CHARACTER)
             logDebugIf(debugParser, "Parsing {} in {}", t, mode);
 
         switch (mode) {
 
         case Mode::INITIAL:
-            _handleInitialMode(t);
+            _handleInitialMode(t, diags);
             break;
 
         case Mode::BEFORE_HTML:
-            _handleBeforeHtml(t);
+            _handleBeforeHtml(t, diags);
             break;
 
         case Mode::BEFORE_HEAD:
-            _handleBeforeHead(t);
+            _handleBeforeHead(t, diags);
             break;
 
         case Mode::IN_HEAD:
-            _handleInHead(t);
+            _handleInHead(t, diags);
             break;
 
         case Mode::IN_HEAD_NOSCRIPT:
-            _handleInHeadNoScript(t);
+            _handleInHeadNoScript(t, diags);
             break;
 
         case Mode::AFTER_HEAD:
-            _handleAfterHead(t);
+            _handleAfterHead(t, diags);
             break;
 
         case Mode::IN_BODY:
-            _handleInBody(t);
+            _handleInBody(t, diags);
             break;
 
         case Mode::TEXT:
-            _handleText(t);
+            _handleText(t, diags);
             break;
 
         case Mode::IN_TABLE:
-            _handleInTable(t);
+            _handleInTable(t, diags);
             break;
 
         case Mode::IN_TABLE_TEXT:
-            _handleInTableText(t);
+            _handleInTableText(t, diags);
             break;
 
         case Mode::IN_CAPTION:
-            _handleInCaption(t);
+            _handleInCaption(t, diags);
             break;
 
         case Mode::IN_COLUMN_GROUP:
-            _handleInColumnGroup(t);
+            _handleInColumnGroup(t, diags);
             break;
 
         case Mode::IN_TABLE_BODY:
-            _handleInTableBody(t);
+            _handleInTableBody(t, diags);
             break;
 
         case Mode::IN_ROW:
-            _handleInTableRow(t);
+            _handleInTableRow(t, diags);
             break;
 
         case Mode::IN_CELL:
-            _handleInCell(t);
+            _handleInCell(t, diags);
             break;
 
         // TODO: https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inselect
@@ -2700,7 +3160,7 @@ export struct HtmlParser : HtmlSink {
             break;
 
         case Mode::AFTER_AFTER_BODY:
-            _handleAfterBody(t);
+            _handleAfterBody(t, diags);
             break;
 
         // TODO: https://html.spec.whatwg.org/multipage/parsing.html#the-after-after-frameset-insertion-mode
@@ -2713,7 +3173,15 @@ export struct HtmlParser : HtmlSink {
     }
 
     // https://html.spec.whatwg.org/multipage/parsing.html#tree-construction
-    void accept(HtmlToken& t) override {
+    void accept(HtmlToken& t, Diag::Collector& diags) override {
+        // NOSPEC
+        if (_ignoreNextTokenIfLineFeed) {
+            _ignoreNextTokenIfLineFeed = false;
+
+            if (t.type == HtmlToken::CHARACTER and t.rune == 0x000A)
+                return;
+        }
+
         // If the stack of open elements is empty
         // If the adjusted current node is an element in the HTML namespace
         // If the adjusted current node is a MathML text integration point and the token is a start tag whose tag name is neither "mglyph" nor "malignmark"
@@ -2723,7 +3191,7 @@ export struct HtmlParser : HtmlSink {
         // If the adjusted current node is an HTML integration point and the token is a character token
         // If the token is an end-of-file token
         if (
-            isEmpty(_openElements) or
+            _openElements.isEmpty() or
             _currentElement()->qualifiedName.ns == Html::NAMESPACE or
             (t.type == HtmlToken::START_TAG and _isHtmlIntegrationPoint(*_currentElement())) or
             (t.type == HtmlToken::CHARACTER and _isMathMlTextIntegrationPoint(*_currentElement())) or
@@ -2731,21 +3199,24 @@ export struct HtmlParser : HtmlSink {
         ) {
             // Process the token according to the rules given in the section
             // corresponding to the current insertion mode in HTML content.
-            _acceptIn(_insertionMode, t);
+            _acceptIn(_insertionMode, t, diags);
         }
 
         // Otherwise
         else {
             // Process the token according to the rules given in the section for parsing tokens in foreign content.
-            _handleInForeignContent(t);
+            _handleInForeignContent(t, diags);
         }
     }
 
-    void write(Str str) {
-        for (auto r : iterRunes(str))
-            _lexer.consume(r);
+    void write(Str str, Diag::Collector& diags) {
+        Io::SScan s{str};
+        while (not s.ended()) {
+            _lexer.consume(s.peek(), s.loc(), diags);
+            s.next();
+        }
         // NOTE: '\3' (End of Text) is used here as a placeholder so we are directed to the EOF case
-        _lexer.consume('\3', true);
+        _lexer.consume('\3', s.loc(), diags, true);
     }
 };
 

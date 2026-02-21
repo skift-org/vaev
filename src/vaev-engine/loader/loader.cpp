@@ -34,6 +34,7 @@ Async::Task<Gc::Ref<Dom::Document>> _loadDocumentAsync(Gc::Heap& heap, Ref::Url 
 
     auto respBody = resp->body.unwrap();
     auto buf = co_trya$(Aio::readAllUtf8Async(*respBody, ct));
+    Diag::Collector diags;
 
     if (not mime.has() or mime->is("application/octet-stream"_mime)) {
         mime = Ref::sniffBytes(bytes(buf));
@@ -42,30 +43,24 @@ Async::Task<Gc::Ref<Dom::Document>> _loadDocumentAsync(Gc::Heap& heap, Ref::Url 
 
     if (mime->is("text/html"_mime)) {
         Html::HtmlParser parser{heap, dom};
-        parser.write(buf);
-
-        co_return Ok(dom);
+        parser.write(buf, diags);
     } else if (mime->is("application/xhtml+xml"_mime)) {
         Io::SScan scan{buf};
         Xml::XmlParser parser{heap};
         co_try$(parser.parse(scan, Html::NAMESPACE, *dom));
-
-        co_return Ok(dom);
     } else if (mime->is("image/svg+xml"_mime)) {
         Io::SScan scan{buf};
         Xml::XmlParser parser{heap};
         co_try$(parser.parse(scan, Svg::NAMESPACE, *dom));
-
-        co_return Ok(dom);
     } else if (mime->is("text/markdown"_mime)) {
         auto doc = Md::parse(buf);
         logDebug("markdown: {}", doc);
         auto html = Md::renderHtml(doc);
-
         Html::HtmlParser parser{heap, dom};
-        parser.write(html);
 
-        co_return Ok(dom);
+        // TODO: Find  a clean way to report inline html error in markdown
+        Diag::Collector htmlDiags = Diag::Collector::ignore();
+        parser.write(html, htmlDiags);
     } else if (mime->is("text/plain"_mime)) {
         auto text = heap.alloc<Dom::Text>();
         text->appendData(buf);
@@ -74,12 +69,18 @@ Async::Task<Gc::Ref<Dom::Document>> _loadDocumentAsync(Gc::Heap& heap, Ref::Url 
         body->appendChild(text);
 
         dom->appendChild(body);
-        co_return Ok(dom);
     } else {
         logError("unsupported MIME type: {}", mime);
 
         co_return Error::invalidInput("unsupported MIME type");
     }
+
+    if (diags.any()) {
+        Diag::SimpleRenderer render{url};
+        render.render(Sys::err(), diags);
+    }
+
+    co_return Ok(dom);
 }
 
 export Async::Task<Gc::Ref<Dom::Document>> viewSourceAsync(Gc::Heap& heap, Http::Client& client, Ref::Url const& url, Async::CancellationToken ct) {
@@ -109,7 +110,15 @@ Async::Task<Style::StyleSheet> _fetchStylesheetAsync(Style::PropertyRegistry& re
     auto buf = co_trya$(Aio::readAllUtf8Async(*respBody, ct));
 
     Io::SScan s{buf};
-    co_return Ok(Style::StyleSheet::parse(registry, s, url, origin));
+    Diag::Collector diags;
+    auto stylesheet = Style::StyleSheet::parse(registry, s, diags, url, origin);
+
+    if (diags.any()) {
+        Diag::SimpleRenderer render{url};
+        render.render(Sys::err(), diags);
+    }
+
+    co_return Ok(stylesheet);
 }
 
 Async::Task<Rc<Scene::Node>> _fetchImageContentAsync(Http::Client& client, Ref::Url url, Async::CancellationToken ct);
@@ -141,7 +150,12 @@ Async::Task<> _fetchResourcesAsync(Style::PropertyRegistry& registry, Http::Clie
     } else if (el and el->qualifiedName == Html::STYLE_TAG) {
         auto text = el->textContent();
         Io::SScan textScan{text};
-        auto sheet = Style::StyleSheet::parse(registry, textScan, node->baseURI());
+        Diag::Collector diags;
+        auto sheet = Style::StyleSheet::parse(registry, textScan, diags, node->baseURI());
+        if (diags.any()) {
+            Diag::SimpleRenderer render{Io::format("{}:<style>", node->baseURI())};
+            render.render(Sys::err(), diags);
+        }
         sb.add(std::move(sheet));
     } else if (el and el->qualifiedName == Html::LINK_TAG) {
         auto rel = el->getAttribute(Html::REL_ATTR);

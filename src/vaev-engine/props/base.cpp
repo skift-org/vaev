@@ -92,7 +92,8 @@ export struct Property : Meta::NoCopy {
         // https://svgwg.org/svg2-draft/styling.html#PresentationAttributes
         virtual Res<Rc<Property>> parsePresentationAttribute(Str style) {
             Css::Lexer lex{style};
-            auto [content, _] = Css::consumeDeclarationValue(lex);
+            Diag::Collector diags = Diag::Collector::ignore();
+            auto [content, _] = Css::consumeDeclarationValue(lex, diags);
             Cursor<Css::Sst> cursor = content;
             return parse(cursor);
         }
@@ -205,68 +206,73 @@ struct DeferredProperty : Property {
     DeferredProperty(Rc<Property::Registration> registration, Css::Content value)
         : Property(registration), _value(value) {}
 
-    static bool _expandVariable(Cursor<Css::Sst>& c, Map<Symbol, Css::Content> const& env, Css::Content& out) {
+    static Res<bool> _expandVariable(Cursor<Css::Sst>& c, Map<Symbol, Css::Content> const& env, Css::Content& out, usize depth) {
+        if (depth > 32)
+            return Error::invalidData("likely dependency cycle in variables");
+
         if (not(c->type == Css::Sst::FUNC and
                 c->prefix == Css::Token::function("var("))) {
-            return false;
+            return Ok(false);
         }
 
         Cursor<Css::Sst> content = c->content;
 
         eatWhitespace(content);
         if (content.ended())
-            return true;
+            return Ok(true);
 
         if (content.peek() != Css::Token::IDENT)
-            return true;
+            return Ok(true);
 
         Symbol varName = Symbol::from(content->token.data);
         if (auto ref = env.access(varName)) {
             Cursor<Css::Sst> varContent = *ref;
-            _expandContent(varContent, env, out);
-            return true;
+            try$(_expandContent(varContent, env, out, depth));
+            return Ok(true);
         }
         content.next();
 
         eatWhitespace(content);
 
         if (not content.skip(Css::Token::COMMA))
-            return true;
+            return Ok(true);
 
-        _expandContent(content, env, out);
-        return true;
+        try$(_expandContent(content, env, out, depth));
+        return Ok(true);
     }
 
-    static bool _expandFunction(Cursor<Css::Sst>& c, Map<Symbol, Css::Content> const& env, Css::Content& out) {
+    static Res<bool> _expandFunction(Cursor<Css::Sst>& c, Map<Symbol, Css::Content> const& env, Css::Content& out, usize depth) {
         if (c->type != Css::Sst::FUNC)
-            return false;
+            return Ok(false);
 
         auto& func = out.emplaceBack(Css::Sst::FUNC);
         func.prefix = c->prefix;
         Cursor<Css::Sst> content = c->content;
-        _expandContent(content, env, func.content);
+        try$(_expandContent(content, env, func.content, depth));
 
-        return true;
+        return Ok(true);
     }
 
-    static void _expandContent(Cursor<Css::Sst>& c, Map<Symbol, Css::Content> const& env, Css::Content& out) {
+    static Res<> _expandContent(Cursor<Css::Sst>& c, Map<Symbol, Css::Content> const& env, Css::Content& out, usize depth) {
         // NOTE: Hint that we will add all the remaining elements
         out.ensure(out.len() + c.rem());
 
         while (not c.ended()) {
-            if (not _expandVariable(c, env, out) and
-                not _expandFunction(c, env, out)) {
+            if (not try$(_expandVariable(c, env, out, depth + 1)) and
+                not try$(_expandFunction(c, env, out, depth))) {
                 out.pushBack(*c);
             }
 
             c.next();
         }
+
+        return Ok();
     }
 
     Res<Rc<Property>> _expandProperty(SpecifiedValues& child) const {
         Cursor<Css::Sst> cursor = _value;
         Css::Content out;
-        _expandContent(cursor, *child.variables, out);
+        try$(_expandContent(cursor, *child.variables, out, 0));
         cursor = out;
 
         // Expanding the variable might have introduced some leading whitespace
@@ -552,7 +558,8 @@ export struct PropertyRegistry {
 
     Res<Rc<Property>> parseValue(Symbol propertyName, Str propertyValue, Flags<Options> options) {
         Css::Lexer lex{propertyValue};
-        auto [content, _] = Css::consumeDeclarationValue(lex);
+        Diag::Collector diags = Diag::Collector::ignore();
+        auto [content, _] = Css::consumeDeclarationValue(lex, diags);
         return parseValue(propertyName, content, options);
     }
 
@@ -594,7 +601,8 @@ export struct PropertyRegistry {
 
     Vec<Rc<Property>> parseDeclarations(Str style, Flags<Options> options) {
         Css::Lexer lex{style};
-        auto sst = Css::consumeDeclarationList(lex, true);
+        auto diags = Diag::Collector::ignore();
+        auto sst = Css::consumeDeclarationList(lex, diags, true);
         return parseDeclarations(sst, options);
     }
 

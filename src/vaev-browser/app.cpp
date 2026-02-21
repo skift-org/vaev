@@ -17,7 +17,6 @@ namespace Vaev::Browser {
 
 enum struct SidePanel {
     CLOSE,
-    BOOKMARKS,
     DEVELOPER_TOOLS,
 };
 
@@ -202,7 +201,6 @@ Ui::Child mainMenu([[maybe_unused]] State const& s) {
             Ui::SINK<>,
             Mdi::BOOKMARK_OUTLINE, "Add bookmark..."
         ),
-        Kr::contextMenuItem(Model::bind(SidePanel::BOOKMARKS), Mdi::BOOKMARK, "Bookmarks"),
         Kr::separator(),
         Kr::contextMenuItem(
             not s.loadingResult
@@ -243,7 +241,7 @@ Ui::Child reloadButton(State const& s) {
            ) |
            Ui::insets(6) |
            Ui::center() |
-           Ui::minSize({36, 36}) |
+           Ui::minSize({32, 32}) |
            Ui::button(Model::bind<Reload>(), Ui::ButtonStyle::subtle());
 }
 
@@ -308,11 +306,10 @@ Ui::Child inspectorContent(State const& s) {
     );
 }
 
-Ui::Child bookmarkList(State const& s) {
+Ui::Child bookmarkSidePanel(State const& s) {
     if (not s.bookmarks) {
         return Ui::labelMedium(Ui::GRAY500, "No bookmarks") |
-               Ui::center() |
-               Ui::grow();
+               Ui::center();
     }
 
     Ui::Children children;
@@ -324,28 +321,11 @@ Ui::Child bookmarkList(State const& s) {
                4,
                std::move(children)
            ) |
-           Ui::insets(6) |
-           Ui::vscroll() | Ui::grow();
-}
-
-Ui::Child bookmarPanel(State const& s) {
-    Ui::Children children;
-    for (auto& bm : s.bookmarks) {
-        children.pushBack(Ui::button(Ui::SINK<>, Mdi::BOOKMARK, bm.name));
-    }
-
-    return Kr::sidePanelContent({
-        Kr::sidePanelTitle(Model::bind(SidePanel::CLOSE), "Bookmarks"),
-        Kr::separator(),
-        bookmarkList(s),
-    });
+           Ui::vscroll();
 }
 
 Ui::Child sidePanel(State const& s) {
     switch (s.sidePanel) {
-    case SidePanel::BOOKMARKS:
-        return bookmarPanel(s);
-
     case SidePanel::DEVELOPER_TOOLS:
         return Kr::sidePanelContent({
             Kr::sidePanelTitle(Model::bind(SidePanel::CLOSE), "Developer Tools"),
@@ -383,11 +363,18 @@ Ui::Child webview(State const& s) {
 }
 
 Ui::Child appContent(State const& s) {
+    auto wv = webview(s) |
+              Ui::box(Ui::BoxStyle{
+                  .borderRadii = 6,
+                  .borderWidth = 1,
+                  .borderFill = Ui::GRAY800,
+              });
     if (s.sidePanel == SidePanel::CLOSE) {
-        return webview(s);
+        return wv;
     }
     return Ui::hflow(
-        webview(s) | Ui::grow(),
+        wv |
+            Ui::grow(),
         sidePanel(s) | Kr::resizable(Kr::ResizeHandle::START, {320}, NONE)
     );
 }
@@ -428,6 +415,9 @@ export Ui::Child app(Rc<Dom::Window> window) {
                         ),
                     };
                 },
+                .sidebar = [&] {
+                    return bookmarkSidePanel(s);
+                },
                 .body = [&] {
                     return appContent(s);
                 },
@@ -436,7 +426,6 @@ export Ui::Child app(Rc<Dom::Window> window) {
                    Ui::keyboardShortcut(App::Key::R, App::KeyMod::CTRL, Model::bind<Reload>()) |
                    Ui::keyboardShortcut(App::Key::F5, Model::bind<Reload>()) |
                    Ui::keyboardShortcut(App::Key::F12, Model::bind(SidePanel::DEVELOPER_TOOLS)) |
-                   Ui::keyboardShortcut(App::Key::B, App::KeyMod::CTRL, Model::bind(SidePanel::BOOKMARKS)) |
                    Ui::keyboardShortcut(App::Key::P, App::KeyMod::CTRL, [&](auto& n) {
                        if (not s.loadingResult)
                            return;
