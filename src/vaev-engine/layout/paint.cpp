@@ -272,10 +272,10 @@ static void _paintFrag(Frag& frag, Scene::Stack& stack, Opt<UsedBorders> usedBor
 }
 
 static void _paintChildren(Frag& frag, Scene::Stack& stack, auto predicate) {
-    Opt<Map<Box*, UsedBorders>> tableBoxBorderMapping;
+    Opt<Map<usize, UsedBorders> const&> tableBoxBorderMapping;
     if (frag.style().display == Display::TABLE_BOX) {
         // FIXME: downcasting like this?
-        TableFormatingContext* tableFormattingContext = (TableFormatingContext*)&(*frag.box->formatingContext.unwrap());
+        TableFormatingContext* tableFormattingContext = static_cast<TableFormatingContext*>(&*frag.box->formatingContext.unwrap());
         tableBoxBorderMapping = tableFormattingContext->boxBorderMapping;
     }
 
@@ -296,10 +296,11 @@ static void _paintChildren(Frag& frag, Scene::Stack& stack, auto predicate) {
             continue;
         }
 
-        if (predicate(s)) {
+        if (predicate(s) and tableBoxBorderMapping) {
             _paintFrag(
                 c, stack,
-                tableBoxBorderMapping ? tableBoxBorderMapping->get(c.box) : Opt<UsedBorders>{NONE}
+                tableBoxBorderMapping
+                    ->lookup((usize)&c.box.unwrap())
             );
         }
         _paintChildren(c, stack, predicate);
