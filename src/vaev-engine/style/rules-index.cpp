@@ -25,7 +25,7 @@ struct RuleIndex {
 
     usize _ruleCount = 0;
 
-    Map<String, Vec<Entry>> _idRules;
+    Map<Symbol, Vec<Entry>> _idRules;
     Map<String, Vec<Entry>> _classRules;
     Map<Symbol, Vec<Entry>> _typeNameRules;
     Map<Symbol, Vec<Entry>> _pseudoRules;
@@ -52,7 +52,7 @@ struct RuleIndex {
                 _pseudoRules.lookupOrPutDefault(s.type).pushBack({ruleId, rule});
             },
             [&](IdSelector const& s) {
-                _idRules.lookupOrPutDefault(s.id.str()).pushBack({ruleId, rule});
+                _idRules.lookupOrPutDefault(s.id).pushBack({ruleId, rule});
             },
             [&](ClassSelector const& s) {
                 _classRules.lookupOrPutDefault(s.class_).pushBack({ruleId, rule});

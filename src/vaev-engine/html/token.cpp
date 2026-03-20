@@ -32,11 +32,11 @@ export struct HtmlToken {
     };
 
     Type type = NIL;
-    Symbol name = ""_sym;
+    Opt<Symbol> name = NONE;
     Rune rune = '\0';
     String data = ""s;
-    String publicIdent = ""s;
-    String systemIdent = ""s;
+    Opt<String> publicIdent = NONE;
+    Opt<String> systemIdent = NONE;
     Vec<Attr> attrs = {};
     Io::LocSpan span = {};
     bool forceQuirks{false};

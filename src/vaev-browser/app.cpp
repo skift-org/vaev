@@ -363,12 +363,7 @@ Ui::Child webview(State const& s) {
 }
 
 Ui::Child appContent(State const& s) {
-    auto wv = webview(s) |
-              Ui::box(Ui::BoxStyle{
-                  .borderRadii = 6,
-                  .borderWidth = 1,
-                  .borderFill = Ui::GRAY800,
-              });
+    auto wv = webview(s) | Kr::scaffoldContent();
     if (s.sidePanel == SidePanel::CLOSE) {
         return wv;
     }
@@ -416,7 +411,7 @@ export Ui::Child app(Rc<Dom::Window> window) {
                     };
                 },
                 .sidebar = [&] {
-                    return bookmarkSidePanel(s);
+                    return Kr::sidenavContent({bookmarkSidePanel(s)});
                 },
                 .body = [&] {
                     return appContent(s);

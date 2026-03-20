@@ -296,11 +296,11 @@ static void _paintChildren(Frag& frag, Scene::Stack& stack, auto predicate) {
             continue;
         }
 
-        if (predicate(s) and tableBoxBorderMapping) {
+        if (predicate(s)) {
             _paintFrag(
                 c, stack,
-                tableBoxBorderMapping
-                    ->lookup((usize)&c.box.unwrap())
+                tableBoxBorderMapping ? (Opt<UsedBorders>)tableBoxBorderMapping->lookup((usize)&c.box.unwrap()) : Opt<UsedBorders>{NONE}
+
             );
         }
         _paintChildren(c, stack, predicate);
