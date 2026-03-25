@@ -38,7 +38,7 @@ cd vaev
 
 pip install git+https://codeberg.org/cute-engineering/cutekit
 
-python -m cutekit run --release vaev-browser -- file.html
+python -m cutekit run --release hideo-browser -- file.html
 ```
 
 ## Architecture
