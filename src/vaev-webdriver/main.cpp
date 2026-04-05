@@ -8,7 +8,7 @@ import Vaev.Webdriver;
 
 using namespace Karm;
 
-Async::Task<> entryPointAsync(Sys::Context& ctx, Async::CancellationToken ct) {
+Async::Task<> entryPointAsync(Sys::Env& env, Async::CancellationToken ct) {
     auto portOption = Cli::option<isize>('p', "port"s, "TCP port to listen to (default: 4444)."s, 4444);
     Cli::Section serverSection = {"Server Options"s, {portOption}};
 
