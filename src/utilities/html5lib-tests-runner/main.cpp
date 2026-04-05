@@ -30,14 +30,14 @@ Async::Task<> entryPointAsync([[maybe_unused]] Sys::Env& env, [[maybe_unused]] A
         }
     };
 
-    co_trya$(cmd.execAsync(ctx));
+    co_trya$(cmd.execAsync(env));
     if (not cmd)
         co_return Ok();
 
     if (not suiteArg.has())
         co_return Error::invalidInput("test suite required");
 
-    auto input = inputArg.value() == "-" ? "fd:stdin"_url : Ref::parseUrlOrPath(inputArg.value(), co_try$(Sys::pwd()));
+    auto input = inputArg.value() == "-" ? "fd:stdin"_url : Ref::parseUrlOrPath(inputArg.value(), env.cwd());
     auto inputString = co_try$(Sys::readAllUtf8(input));
 
     Html5LibTest::Result result;
