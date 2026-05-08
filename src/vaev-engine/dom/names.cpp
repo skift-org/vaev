@@ -3,6 +3,7 @@ export module Vaev.Engine:dom.names;
 import Karm.Core;
 
 using namespace Karm;
+using namespace Karm::Literals;
 
 namespace Vaev {
 
@@ -15,7 +16,7 @@ export struct QualifiedName {
 
     bool operator==(QualifiedName const& other) const = default;
 
-    void hash(Hasher& h) const {
+    void hash(Meta::Derive<Hasher> auto& h) const {
         Karm::hash(h, ns);
         Karm::hash(h, name);
     }

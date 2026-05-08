@@ -8,7 +8,7 @@ import Karm.Core;
 import Karm.Logger;
 import Karm.Debug;
 import :css.parser;
-import :style.specified;
+import :style.computed;
 
 using namespace Karm;
 
@@ -24,7 +24,7 @@ namespace Properties {
 
 } // namespace Properties
 
-export struct PropertyRegistry;
+export struct RegisteredPropertySet;
 
 export struct Property : Meta::NoCopy {
     enum struct Options : u8 {
@@ -45,7 +45,14 @@ export struct Property : Meta::NoCopy {
 
         // The property is not reset by all:
         // https://drafts.csswg.org/css-cascade/#all-shorthand
-        ALL_EXCLUDED = 1 << 5
+        ALL_EXCLUDED = 1 << 5,
+
+        /// The property participates in a bulk-inheritance optimization.
+        ///
+        /// Instead of calling the virtual `inherit()` method for every individual
+        /// property, the engine performs a "fast-path" copy of large state blocks
+        /// (e.g., Custom Properties) from parent to child.
+        BULK_INHERITED = 1 << 6,
     };
 
     using enum Options;
@@ -76,9 +83,9 @@ export struct Property : Meta::NoCopy {
 
         virtual Rc<Property> initial() const = 0;
 
-        virtual Rc<Property> load(SpecifiedValues const& c) const = 0;
+        virtual Rc<Property> load(ComputedValues const& c) const = 0;
 
-        virtual void inherit(SpecifiedValues const& parent, SpecifiedValues& child) {
+        virtual void inherit(ComputedValues const& parent, ComputedValues& child) const {
             // NOTE: This is the slow fallback path for properties that are not
             //       commonly inherited. Any property marked with the INHERITED
             //       flag should override this method with a faster implementation.
@@ -107,7 +114,7 @@ export struct Property : Meta::NoCopy {
 
     virtual ~Property() = default;
 
-    virtual Vec<Rc<Property>> expandShorthand(PropertyRegistry&, [[maybe_unused]] SpecifiedValues const& parent, [[maybe_unused]] SpecifiedValues& child) const {
+    virtual Vec<Rc<Property>> expandShorthand(RegisteredPropertySet&, [[maybe_unused]] ComputedValues const& parent, [[maybe_unused]] ComputedValues& child) const {
         if (isBogusProperty())
             logFatal("trying to expand {#} as a bug property");
 
@@ -118,16 +125,26 @@ export struct Property : Meta::NoCopy {
         return {};
     }
 
-    virtual void apply(SpecifiedValues&) const {
+    virtual void apply(ComputedValues&) const {
         logFatal("longhand property {#} is missing apply() implementation", registration->name());
     }
 
-    virtual void apply(SpecifiedValues const& parent, SpecifiedValues& child) const {
+    virtual void apply(ComputedValues const& parent, ComputedValues& child) const {
         (void)parent;
         apply(child);
     }
 
     virtual void repr(Io::Emit& e) const = 0;
+
+    /// Evaluates and returns the computed value of this property without permanently
+    /// altering the target element's computed values.
+    Rc<Property> computedValue(ComputedValues const& parent, ComputedValues& child) const {
+        auto save = registration->load(child);
+        apply(parent, child);
+        auto result = registration->load(child);
+        save->apply(parent, child);
+        return result;
+    }
 
     bool isCustomProperty() const {
         return registration->flags().has(CUSTOM_PROPERTY);
@@ -143,6 +160,13 @@ export struct Property : Meta::NoCopy {
 
     virtual bool isBogusProperty() const {
         return registration->flags().has(BOGUS_REGISTRATION);
+    }
+
+    bool operator==(Property const& other) const {
+        // HACK: This is a temporary implementation, it should be replaced
+        //       with a more robust equality check that compares the actual
+        //       values of the properties.
+        return Io::toStr(*this) == Io::toStr(other);
     }
 };
 
@@ -162,7 +186,12 @@ struct CustomProperty : Property {
         }
 
         Flags<Options> flags() const override {
-            return {INHERITED, CUSTOM_PROPERTY, ALL_EXCLUDED};
+            return {
+                INHERITED,
+                CUSTOM_PROPERTY,
+                ALL_EXCLUDED,
+                BULK_INHERITED,
+            };
         }
 
         Rc<Property> initial() const override {
@@ -171,8 +200,13 @@ struct CustomProperty : Property {
             );
         }
 
-        Rc<Property> load(SpecifiedValues const& c) const override {
-            return makeRc<CustomProperty>(self(), c.getCustomProp(_name));
+        void inherit(ComputedValues const& parent, ComputedValues& child) const override {
+            if (auto maybeProp = parent.getCustomProp(_name))
+                child.setCustomProp(_name, maybeProp.unwrap());
+        }
+
+        Rc<Property> load(ComputedValues const& c) const override {
+            return makeRc<CustomProperty>(self(), c.getCustomProp(_name).unwrapOr({}));
         }
 
         Res<Rc<Property>> parse(Cursor<Css::Sst>& c) const override {
@@ -187,7 +221,7 @@ struct CustomProperty : Property {
     CustomProperty(Rc<Property::Registration> registration, Css::Content value)
         : Property(registration), _value(value) {}
 
-    void apply(SpecifiedValues& child) const override {
+    void apply(ComputedValues& child) const override {
         child.setCustomProp(registration->name(), _value);
     }
 
@@ -196,7 +230,53 @@ struct CustomProperty : Property {
     }
 };
 
-// MARK: Deferred Property ------------------------------------------------------
+// MARK: Toggle Property -------------------------------------------------------
+
+// https://drafts.csswg.org/css-values-5/#toggle-notation
+// The toggle() expression allows descendant elements to cycle over a list of values instead of inheriting the same value.
+struct ToggleProperty : Property {
+    Vec<Rc<Property>> _value;
+
+    ToggleProperty(Rc<Property::Registration> registration, Vec<Rc<Property>> value)
+        : Property(registration), _value(value) {}
+
+    Vec<Rc<Property>> expandShorthand(RegisteredPropertySet& registry, ComputedValues const& parent, ComputedValues& child) const override {
+        // If toggle() is used on a shorthand property, it sets each of its
+        // longhands to a toggle() value with arguments corresponding to what
+        // the longhand would have received had each of the original toggle()
+        // arguments been the sole value of the shorthand.
+        Map<Symbol, Vec<Rc<Property>>> props;
+        for (auto& shorthand : _value)
+            for (auto& longhand : shorthand->expandShorthand(registry, parent, child))
+                props.lookupOrPutDefault(longhand->registration->name()).pushBack(longhand);
+
+        return props.mutIterValue() |
+               Select([](Vec<Rc<Property>>& v) {
+                   return makeRc<ToggleProperty>(v[0]->registration, std::move(v));
+               }) |
+               Collect<Vec<Rc<Property>>>();
+    }
+
+    void apply(ComputedValues const& parent, ComputedValues& child) const override {
+        if (isEmpty(_value))
+            return;
+
+        auto parentProperty = registration->load(parent);
+        usize index = 0;
+        for (auto& p : _value) {
+            index++;
+            if (parentProperty == p->computedValue(parent, child))
+                break;
+        }
+        _value[index % _value.len()]->apply(parent, child);
+    }
+
+    void repr(Io::Emit& e) const override {
+        e("(toggle {})", _value);
+    }
+};
+
+// MARK: Deferred Property -----------------------------------------------------
 
 // NOTE: A property that could not be parsed, it's used to store the value
 //       as-is and apply it with the cascade and custom properties
@@ -269,10 +349,10 @@ struct DeferredProperty : Property {
         return Ok();
     }
 
-    Res<Rc<Property>> _expandProperty(SpecifiedValues& child) const {
+    Res<Rc<Property>> _expandProperty(ComputedValues& child) const {
         Cursor<Css::Sst> cursor = _value;
         Css::Content out;
-        try$(_expandContent(cursor, *child.variables, out, 0));
+        try$(_expandContent(cursor, *child.customProps, out, 0));
         cursor = out;
 
         // Expanding the variable might have introduced some leading whitespace
@@ -288,7 +368,7 @@ struct DeferredProperty : Property {
         return prop;
     }
 
-    Vec<Rc<Property>> expandShorthand(PropertyRegistry& registry, SpecifiedValues const& parent, SpecifiedValues& child) const override {
+    Vec<Rc<Property>> expandShorthand(RegisteredPropertySet& registry, ComputedValues const& parent, ComputedValues& child) const override {
         if (not isShorthandProperty())
             logFatal("expandShorthand called on non shorthand property {#}", registration->name());
 
@@ -298,7 +378,7 @@ struct DeferredProperty : Property {
         return prop.unwrap()->expandShorthand(registry, parent, child);
     }
 
-    void apply(SpecifiedValues const& parent, SpecifiedValues& child) const override {
+    void apply(ComputedValues const& parent, ComputedValues& child) const override {
         auto prop = _expandProperty(child);
         if (not prop)
             return;
@@ -327,7 +407,7 @@ struct DefaultedProperty : Property {
     DefaultedProperty(Rc<Property::Registration> registration, Default value)
         : Property(registration), _value(value) {}
 
-    Vec<Rc<Property>> expandShorthand(PropertyRegistry& registry, SpecifiedValues const& parent, SpecifiedValues& child) const override {
+    Vec<Rc<Property>> expandShorthand(RegisteredPropertySet& registry, ComputedValues const& parent, ComputedValues& child) const override {
         if (_value == Default::INITIAL) {
             // The initial CSS-wide keyword represents the value
             // defined as the property’s initial value.
@@ -351,7 +431,7 @@ struct DefaultedProperty : Property {
         }
     }
 
-    void apply(SpecifiedValues const& parent, SpecifiedValues& child) const override {
+    void apply(ComputedValues const& parent, ComputedValues& child) const override {
         if (_value == Default::INITIAL) {
             // The initial CSS-wide keyword represents the value
             // defined as the property’s initial value.
@@ -407,7 +487,7 @@ struct BogusProperty : Property {
             unreachable();
         }
 
-        Rc<Property> load(SpecifiedValues const&) const override {
+        Rc<Property> load(ComputedValues const&) const override {
             unreachable();
         }
 
@@ -435,7 +515,7 @@ struct BogusProperty : Property {
 
 // MARK: Property Registry -----------------------------------------------------
 
-export struct PropertyRegistry {
+export struct RegisteredPropertySet {
     Map<Symbol, Symbol> _legacyAlias;
     Map<Symbol, Rc<Property::Registration>> _registrations;
     Map<Symbol, Rc<Property::Registration>> _presentationAttributes;
@@ -445,8 +525,9 @@ export struct PropertyRegistry {
         GENERATE_CUSTOM_PROPERTY = 1 << 1,
         DEFER_UNPARSABLE = 1 << 2,
         ALLOW_DEFAULTING = 1 << 3,
+        ALLOW_TOGGLE = 1 << 4,
 
-        TOP_LEVEL = GENERATE_BOGUS | GENERATE_CUSTOM_PROPERTY | DEFER_UNPARSABLE | ALLOW_DEFAULTING,
+        TOP_LEVEL = GENERATE_BOGUS | GENERATE_CUSTOM_PROPERTY | DEFER_UNPARSABLE | ALLOW_DEFAULTING | ALLOW_TOGGLE,
     };
 
     using enum Options;
@@ -455,7 +536,7 @@ export struct PropertyRegistry {
         return _registrations;
     }
 
-    void registerProperty(Symbol propertyName, Rc<Property::Registration> registration) {
+    void registerProperty(Symbol const& propertyName, Rc<Property::Registration> registration) {
         if (registration->flags().has(Property::PRESENTATION_ATTRIBUTE))
             _presentationAttributes.put(propertyName, registration);
 
@@ -472,15 +553,18 @@ export struct PropertyRegistry {
         registerProperty(registration->name(), registration);
     }
 
-    Rc<Property::Registration> registerCustomProperty(Symbol propertyName) {
+    Rc<Property::Registration> registerCustomProperty(Symbol const& propertyName) {
         auto registration = makeRc<CustomProperty::Registration>(propertyName);
         registration->_self = registration;
         registerProperty(propertyName, registration);
         return registration;
     }
 
-    Opt<Rc<Property::Registration>> resolveRegistration(Symbol propertyName, Flags<Options> options) {
-        propertyName = _legacyAlias.lookup(propertyName).unwrapOr(propertyName);
+    Opt<Rc<Property::Registration>> resolveRegistration(Symbol const& unresolvedPropertyName, Flags<Options> options) {
+        auto const& propertyName =
+            _legacyAlias
+                .lookup(unresolvedPropertyName)
+                .unwrapOr(unresolvedPropertyName);
 
         if (auto maybeRegistration = _registrations.lookup(propertyName))
             return maybeRegistration.take();
@@ -499,6 +583,45 @@ export struct PropertyRegistry {
 
     Opt<Rc<Property::Registration>> resolveRegistration(Str propertyName, Flags<Options> options) {
         return resolveRegistration(Symbol::from(propertyName), options);
+    }
+
+    // MARK: Initial -----------------------------------------------------------
+
+    // https://www.w3.org/TR/css-cascade-4/#initial-values
+    mutable Opt<Rc<ComputedValues>> _memoInitialComputedValues = NONE;
+
+    Rc<ComputedValues> initialComputedValues() const {
+        if (not _memoInitialComputedValues) {
+            auto initial = makeRc<ComputedValues>();
+            for (auto& [_, registration] : registrations().iterItems())
+                if (not registration->flags().has(Property::SHORTHAND_PROPERTY))
+                    registration->initial()->apply(*initial, *initial);
+            _memoInitialComputedValues = initial;
+        }
+        return makeRc<ComputedValues>(**_memoInitialComputedValues);
+    }
+
+    // MARK: Inherit -----------------------------------------------------------
+
+    // https://www.w3.org/TR/css-cascade-4/#inheriting
+    void inheritsComputedValues(ComputedValues const& parent, ComputedValues& child) const {
+        // Apply defaulted inheritance fast path for property that supports it.
+        child.customProps = parent.customProps;
+
+        // Handle the rest of the properties
+        for (auto& v : _registrations.iterValue()) {
+            auto registrationFlags = v->flags();
+            if (registrationFlags.has({Property::INHERITED}) and
+                not registrationFlags.has({Property::BULK_INHERITED})) {
+                v->inherit(parent, child);
+            }
+        }
+    }
+
+    Rc<ComputedValues> inheritsComputedValues(ComputedValues const& parent) const {
+        auto computedValues = initialComputedValues();
+        inheritsComputedValues(parent, *computedValues);
+        return computedValues;
     }
 
     // MARK: Value Parsing -----------------------------------------------------
@@ -520,11 +643,28 @@ export struct PropertyRegistry {
         return Ok(makeRc<DefaultedProperty>(registration, value));
     }
 
+    Res<Rc<Property>> _parseToggle(Rc<Property::Registration> registration, Cursor<Css::Sst>& content) {
+        if (content.ended())
+            return Error::invalidData("unexpected end of input");
+
+        if (content.peek().prefix != Css::Token::function("toggle("))
+            return Error::invalidData("unknown declaration");
+
+        Vec<Rc<Property>> options;
+        Cursor<Css::Sst> toggleContent = content->content;
+        while (not toggleContent.ended()) {
+            options.pushBack(try$(registration->parse(toggleContent)));
+            skipOmmitableComma(toggleContent);
+        }
+        content.next();
+        return Ok(makeRc<ToggleProperty>(registration, std::move(options)));
+    }
+
     Rc<Property> _deferProperty(Rc<Property::Registration> registration, Slice<Css::Sst> content) {
         return makeRc<DeferredProperty>(registration, content);
     }
 
-    Res<Rc<Property>> parseValue(Symbol propertyName, Slice<Css::Sst> content, Flags<Options> options) {
+    Res<Rc<Property>> parseValue(Symbol const& propertyName, Cursor<Css::Sst> content, Flags<Options> options) {
         Cursor cursor = content;
 
         auto registration = try$(resolveRegistration(propertyName, options));
@@ -532,31 +672,31 @@ export struct PropertyRegistry {
             return Ok(makeRc<BogusProperty>(registration, content, Error::invalidData("unknow property")));
 
         eatWhitespace(cursor);
-        if (options.has(ALLOW_DEFAULTING)) {
+        if (options.has(ALLOW_DEFAULTING))
             if (auto defaulted = _parseDefaulted(registration, cursor))
-                return Ok(defaulted.take());
-        }
+                return defaulted;
+
+        if (options.has(ALLOW_TOGGLE))
+            if (auto toggle = _parseToggle(registration, cursor))
+                return toggle;
 
         auto maybeProp = registration->parse(cursor);
 
-        if (options.has(DEFER_UNPARSABLE)) {
-            if (not maybeProp)
-                return Ok(_deferProperty(registration, content));
+        if (options.has(DEFER_UNPARSABLE) and not maybeProp) {
+            return Ok(_deferProperty(registration, content));
         }
 
         eatWhitespace(cursor);
 
-        if (options.has(GENERATE_BOGUS)) {
-            if (not cursor.ended()) {
-                auto registration = makeRc<BogusProperty::Registration>(propertyName);
-                return Ok(makeRc<BogusProperty>(registration, content, Error::invalidData("un-consumed token in property value")));
-            }
+        if (options.has(GENERATE_BOGUS) and not cursor.ended()) {
+            auto registration = makeRc<BogusProperty::Registration>(propertyName);
+            return Ok(makeRc<BogusProperty>(registration, content, Error::invalidData("un-consumed token in property value")));
         }
 
         return maybeProp;
     }
 
-    Res<Rc<Property>> parseValue(Symbol propertyName, Str propertyValue, Flags<Options> options) {
+    Res<Rc<Property>> parseValue(Symbol const& propertyName, Str propertyValue, Flags<Options> options) {
         Css::Lexer lex{propertyValue};
         Diag::Collector diags = Diag::Collector::ignore();
         auto [content, _] = Css::consumeDeclarationValue(lex, diags);

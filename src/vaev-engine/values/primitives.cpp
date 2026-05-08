@@ -6,6 +6,7 @@ export module Vaev.Engine:values.primitives;
 
 import Karm.Core;
 import Karm.Ref;
+import Karm.Math;
 
 import :css;
 import :values.base;
@@ -89,7 +90,7 @@ struct CustomIdent {
 
     auto operator<=>(CustomIdent const& other) const = default;
 
-    void hash(Hasher& h) const {
+    void hash(Meta::Derive<Hasher> auto& h) const {
         Karm::hash(h, _symbol);
     }
 

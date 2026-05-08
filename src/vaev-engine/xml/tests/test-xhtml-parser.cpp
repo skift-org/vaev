@@ -5,6 +5,7 @@ import Karm.Ref;
 import Vaev.Engine;
 
 using namespace Karm;
+using namespace Karm::Literals;
 
 namespace Vaev::Dom::Tests {
 
@@ -155,7 +156,7 @@ test$("parse-text-between-tags-and-before") {
     auto text1 = el->firstChild()->is<Text>();
     expectNe$(text1, nullptr);
     expect$(text1->nodeType() == NodeType::TEXT);
-    expectEq$(text1->data(), "test2");
+    expectEq$(text1->data(), "test2"s);
 
     auto div = text1->nextSibling()->is<Element>();
     expectNe$(div, nullptr);
@@ -165,7 +166,7 @@ test$("parse-text-between-tags-and-before") {
     auto text2 = div->firstChild()->is<Text>();
     expectNe$(text2, nullptr);
     expect$(text2->nodeType() == NodeType::TEXT);
-    expectEq$(text2->data(), "text");
+    expectEq$(text2->data(), "text"s);
 
     return Ok();
 }

@@ -6,6 +6,9 @@ import Karm.Logger;
 
 import :style.rules;
 
+using namespace Karm::Literals;
+using namespace Karm::Ref::Literals;
+
 namespace Vaev::Style {
 
 // https://www.w3.org/TR/cssom-1/#css-style-sheets
@@ -16,7 +19,7 @@ export struct StyleSheet {
     Vec<Rule> rules;
     Origin origin = Origin::AUTHOR;
 
-    static StyleSheet parse(PropertyRegistry& registry, Css::Sst const& sst, Ref::Url href, Origin origin) {
+    static StyleSheet parse(RegisteredPropertySet& registry, Css::Sst const& sst, Ref::Url href, Origin origin) {
         Namespace ns;
 
         if (sst != Css::Sst::LIST)
@@ -37,7 +40,7 @@ export struct StyleSheet {
         return res;
     }
 
-    static StyleSheet parse(PropertyRegistry& registry, Io::SScan& s, Diag::Collector& diags, Ref::Url href, Origin origin = Origin::AUTHOR) {
+    static StyleSheet parse(RegisteredPropertySet& registry, Io::SScan& s, Diag::Collector& diags, Ref::Url href, Origin origin = Origin::AUTHOR) {
         Css::Lexer lex{s};
         Css::Sst sst = consumeRuleList(lex, true, diags);
         return parse(registry, sst, href, origin);

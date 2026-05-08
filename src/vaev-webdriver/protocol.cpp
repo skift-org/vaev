@@ -10,6 +10,7 @@ import Karm.Print;
 import Karm.Http;
 
 using namespace Karm;
+using namespace Karm::Literals;
 
 namespace Vaev::WebDriver {
 
@@ -81,20 +82,19 @@ struct PrintSettings {
         return {};
     }
 
-    Print::Settings toNative() const {
+    Print::Settings derivePrintSettings() const {
         return {
-            .paper = {
-                .name = "custom"s,
-                .width = paper.width * 10 * Print::UNIT,
-                .height = paper.height * 10 * Print::UNIT,
-            },
-            .margins = Math::Insetsf{
-                margins.top * 10 * Print::UNIT,
-                margins.end * 10 * Print::UNIT,
-                margins.bottom * 10 * Print::UNIT,
-                margins.start * 10 * Print::UNIT,
-            },
+            .stock = Print::PaperStock::custom(
+                Print::mmToAu(paper.width * 10),
+                Print::mmToAu(paper.height * 10)
+            ),
             .orientation = orientation,
+            .margins = Math::InsetsAu{
+                Print::mmToAu(margins.top * 10),
+                Print::mmToAu(margins.end * 10),
+                Print::mmToAu(margins.bottom * 10),
+                Print::mmToAu(margins.start * 10),
+            },
             .scale = scale,
             .backgroundGraphics = background,
         };

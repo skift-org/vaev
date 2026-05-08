@@ -6,14 +6,17 @@ import Karm.Cli;
 import Html5LibTest;
 
 using namespace Karm;
+using namespace Karm::Literals;
+using namespace Karm::Ref::Literals;
 
 enum struct Suite {
     TOKENIZER,
     TREE_CONSTRUCTION,
+
     _LEN,
 };
 
-Async::Task<> entryPointAsync([[maybe_unused]] Sys::Env& env, [[maybe_unused]] Async::CancellationToken ct) {
+Async::Task<> entryPointAsync(Sys::Env& env, [[maybe_unused]] Async::CancellationToken ct) {
     auto suiteArg = Cli::option<Suite>('s', "suite"s, "The type of test to run"s);
     auto inputArg = Cli::operand<Str>("input"s, "Input file (default: stdin)"s, {"-"s});
 
@@ -46,7 +49,7 @@ Async::Task<> entryPointAsync([[maybe_unused]] Sys::Env& env, [[maybe_unused]] A
     } else if (suiteArg.value() == Suite::TREE_CONSTRUCTION) {
         result = co_try$(Html5LibTest::TreeConstruction::run(inputString));
     } else {
-        panic("unknown test suite");
+        unreachable();
     }
 
     Serde::Object json = {

@@ -5,6 +5,7 @@ import Karm.Math;
 import Karm.Diag;
 
 using namespace Karm;
+using namespace Karm::Math::Literals;
 
 namespace Vaev::Style::Tests {
 
@@ -72,7 +73,8 @@ test$("vaev-css-build-display") {
 
 test$("vaev-css-build-margin") {
     auto testCase = [&](Str input, Math::Insets<Width> expected) -> Res<> {
-        auto res = defaultRegistry().parseValue(Properties::MARGIN, input, {});
+        auto registry = defaultRegistry();
+        auto res = registry.parseValue(Properties::MARGIN, input, {});
         expect$(res);
 
         auto prop = try$(res.take().cast<MarginProperty>());

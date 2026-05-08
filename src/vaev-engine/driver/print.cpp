@@ -20,9 +20,9 @@ using namespace Karm;
 
 namespace Vaev::Driver {
 
-void _paintCornerMargin(Style::PageSpecifiedValues& pageStyle, Scene::Stack& stack, RectAu const& rect, Style::PageArea area, usize currentPage, Layout::RunningPositionMap& runningPosition) {
+void _paintCornerMargin(Style::PageComputedValues& pageStyle, Scene::Stack& stack, RectAu const& rect, Style::PageArea area, usize currentPage, Layout::RunningPositionMap& runningPosition) {
     Layout::Tree tree{
-        .root = Layout::buildForPseudoElement(pageStyle.area(area), currentPage, runningPosition),
+        .root = Layout::buildElement(pageStyle.area(area), currentPage, runningPosition),
         .viewport = Layout::Viewport{.small = rect.size()}
     };
     auto [_, frag] = Layout::layoutAndCommitRoot(
@@ -37,10 +37,10 @@ void _paintCornerMargin(Style::PageSpecifiedValues& pageStyle, Scene::Stack& sta
     Layout::paint(frag, stack);
 }
 
-void _paintMainMargin(Style::PageSpecifiedValues& pageStyle, Scene::Stack& stack, RectAu const& rect, Style::PageArea mainArea, Array<Style::PageArea, 3> subAreas, usize currentPage, Layout::RunningPositionMap& runningPosition) {
-    auto box = Layout::buildForPseudoElement(pageStyle.area(mainArea), currentPage, runningPosition);
+void _paintMainMargin(Style::PageComputedValues& pageStyle, Scene::Stack& stack, RectAu const& rect, Style::PageArea mainArea, Array<Style::PageArea, 3> subAreas, usize currentPage, Layout::RunningPositionMap& runningPosition) {
+    auto box = Layout::buildElement(pageStyle.area(mainArea), currentPage, runningPosition);
     for (auto subArea : subAreas) {
-        box.add(Layout::buildForPseudoElement(pageStyle.area(subArea), currentPage, runningPosition));
+        box.add(Layout::buildElement(pageStyle.area(subArea), currentPage, runningPosition));
     }
     Layout::Tree tree{
         .root = std::move(box),
@@ -58,7 +58,7 @@ void _paintMainMargin(Style::PageSpecifiedValues& pageStyle, Scene::Stack& stack
     Layout::paint(frag, stack);
 }
 
-void _paintMargins(Style::PageSpecifiedValues& pageStyle, RectAu pageRect, RectAu pageContent, Scene::Stack& stack, usize currentPage, Layout::RunningPositionMap& runningPosition) {
+void _paintMargins(Style::PageComputedValues& pageStyle, RectAu pageRect, RectAu pageContent, Scene::Stack& stack, usize currentPage, Layout::RunningPositionMap& runningPosition) {
     // Compute all corner rects
     auto topLeftMarginCornerRect = RectAu::fromTwoPoint(pageRect.topStart(), pageContent.topStart());
     auto topRightMarginCornerRect = RectAu::fromTwoPoint(pageRect.topEnd(), pageContent.topEnd());
@@ -89,13 +89,13 @@ struct PaginationContext {
     Style::Media& media;
     Print::Settings const& settings;
     Style::Computer& computer;
-    Style::SpecifiedValues& initialStyle;
+    Rc<Style::ComputedValues> initialStyle;
 };
 
 struct PageLayoutInfos {
     RectAu pageRect;
     RectAu pageContent;
-    Rc<Style::PageSpecifiedValues> pageStyle;
+    Rc<Style::PageComputedValues> pageStyle;
 };
 
 Pair<Vec<Layout::Breakpoint>, Vec<PageLayoutInfos>> collectBreakPointsAndRunningPositions(Layout::RunningPositionMap& runningPosition, PaginationContext& context) {
@@ -115,10 +115,10 @@ Pair<Vec<Layout::Breakpoint>, Vec<PageLayoutInfos>> collectBreakPointsAndRunning
             .blank = false,
         };
 
-        Rc<Style::PageSpecifiedValues> pageStyle = context.computer.computeFor(context.initialStyle, page);
+        Rc<Style::PageComputedValues> pageStyle = context.computer.computeFor(*context.initialStyle, page);
         RectAu pageRect{
-            context.media.width / Au{context.media.resolution.toDppx()},
-            context.media.height / Au{context.media.resolution.toDppx()}
+            context.media.width / context.media.resolution.toDppx(),
+            context.media.height / context.media.resolution.toDppx()
         };
 
         auto pageSize = pageRect.size().cast<f64>();
@@ -184,10 +184,11 @@ Pair<Vec<Layout::Breakpoint>, Vec<PageLayoutInfos>> collectBreakPointsAndRunning
     return {breakpoints, pageInfos};
 }
 
-export Yield<Print::Page> print(Gc::Ref<Dom::Document> dom, Print::Settings const& settings) {
+export Yield<Print::Page> print(Gc::Heap& heap, Gc::Ref<Dom::Document> dom, Print::Settings const& settings) {
     auto media = Style::Media::forPrint(settings);
 
     Style::Computer computer{
+        heap,
         media,
         dom->registeredPropertySet,
         *dom->styleSheets,
@@ -198,16 +199,16 @@ export Yield<Print::Page> print(Gc::Ref<Dom::Document> dom, Print::Settings cons
 
     // MARK: Page and Margins --------------------------------------------------
 
-    Style::SpecifiedValues initialStyle = Style::SpecifiedValues::initial();
-    initialStyle.color = Gfx::BLACK;
-    initialStyle.setCustomProp("-vaev-url", {Css::Token::string(Io::format("\"{}\"", dom->url()))});
-    initialStyle.setCustomProp("-vaev-title", {Css::Token::string(Io::format("\"{}\"", dom->title()))});
-    initialStyle.setCustomProp("-vaev-datetime", {Css::Token::string(Io::format("\"{}\"", Sys::now()))});
+    auto initialStyle = dom->registeredPropertySet.initialComputedValues();
+    initialStyle->color = Gfx::BLACK;
+    initialStyle->setCustomProp("-vaev-url", {Css::Token::string(Io::format("\"{}\"", dom->url()))});
+    initialStyle->setCustomProp("-vaev-title", {Css::Token::string(Io::format("\"{}\"", dom->title()))});
+    initialStyle->setCustomProp("-vaev-datetime", {Css::Token::string(Io::format("\"{}\"", Sys::now()))});
 
     // MARK: Page Content ------------------------------------------------------
 
     Layout::Tree contentTree = {
-        Layout::build(dom),
+        Layout::buildDocument(dom),
     };
 
     Layout::RunningPositionMap runningPosition = {}; // Mapping the different Running positions to their respective names and their page.
@@ -249,7 +250,7 @@ export Yield<Print::Page> print(Gc::Ref<Dom::Document> dom, Print::Settings cons
         pageStack->prepare();
 
         co_yield Print::Page(
-            settings.paper,
+            settings.pageSize().cast<f64>(),
             makeRc<Scene::Transform>(
                 pageStack,
                 Math::Trans2f::scale(media.resolution.toDppx())

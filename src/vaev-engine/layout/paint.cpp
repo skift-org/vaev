@@ -19,7 +19,7 @@ import :layout.table;
 
 namespace Vaev::Layout {
 
-Opt<Gfx::Borders> buildBorders(Metrics const& metrics, Style::SpecifiedValues const& style, Gfx::Color currentColor) {
+Opt<Gfx::Borders> buildBorders(Metrics const& metrics, Style::ComputedValues const& style, Gfx::Color currentColor) {
     if (metrics.borders.zero())
         return NONE;
 
@@ -74,7 +74,7 @@ Opt<Gfx::Borders> buildBorders(UsedBorders const& border, Gfx::Color currentColo
     return borders;
 }
 
-Opt<Gfx::Outline> buildOutline(Metrics const& metrics, Style::SpecifiedValues const& style, Gfx::Color currentColor) {
+Opt<Gfx::Outline> buildOutline(Metrics const& metrics, Style::ComputedValues const& style, Gfx::Color currentColor) {
     if (metrics.outlineWidth == 0_au)
         return NONE;
 
@@ -110,17 +110,6 @@ static bool _needsNewStackingContext(Frag const& frag) {
            frag.style().opacity != 1.0;
 }
 
-static bool isRootElement(Gc::Ptr<Dom::Element> el) {
-    if (not el)
-        return false;
-
-    auto doc = el->ownerDocument();
-    if (not doc)
-        return false;
-
-    return doc->documentElement() == el;
-}
-
 static void _paintFragBordersAndBackgrounds(Frag& frag, Scene::Stack& stack, Opt<UsedBorders> usedBorders = NONE) {
     auto const& cssBackground = frag.style().backgrounds;
 
@@ -128,7 +117,7 @@ static void _paintFragBordersAndBackgrounds(Frag& frag, Scene::Stack& stack, Opt
     auto color = Vaev::resolve(cssBackground->color, frag.style().color);
 
     if (color.alpha != 0) {
-        if (not isRootElement(frag.box->origin))
+        if (not frag.box->isRootElementPrincipalBox())
             backgrounds.pushBack(color);
     }
 
@@ -146,7 +135,7 @@ static void _paintFragBordersAndBackgrounds(Frag& frag, Scene::Stack& stack, Opt
 
         auto box = makeRc<Scene::Box>(bound, std::move(borders), outline.unwrapOr(Gfx::Outline{}), std::move(backgrounds));
         box->zIndex = _needsNewStackingContext(frag) ? Limits<isize>::MIN : 0;
-        if (isRootElement(frag.box->origin)) {
+        if (frag.box->isRootElementPrincipalBox()) {
             stack.add(makeRc<Scene::Clear>(box, color));
         } else {
             stack.add(box);
@@ -157,14 +146,14 @@ static void _paintFragBordersAndBackgrounds(Frag& frag, Scene::Stack& stack, Opt
 static void _establishStackingContext(Frag& frag, Scene::Stack& stack);
 static void _paintStackingContext(Frag& frag, Scene::Stack& stack);
 
-Rc<Scene::Node> _paintSVGRoot(SVGRootFrag& svgRoot, Gfx::Color currentColor);
-Rc<Scene::Stack> _paintSVGAggregate(SVG::GroupFrag& group, Gfx::Color currentColor, RectAu viewBox);
+Rc<Scene::Node> _paintSVGRoot(SvgRootFrag& svgRoot, Gfx::Color currentColor);
+Rc<Scene::Stack> _paintSVGAggregate(SvgGroupFrag& group, Gfx::Color currentColor, RectAu viewBox);
 
-static RectAu _resolveTransformReferenceSVG(SVG::Frag& svgFrag, RectAu viewBox, TransformBox box);
+static RectAu _resolveTransformReferenceSVG(SvgFrag& svgFrag, RectAu viewBox, TransformBox box);
 static Rc<Scene::Node> _applyTransform(Vaev::Style::TransformProps const& transform, RectAu referenceBox, Rc<Scene::Node> content);
 
 // FIXME: move this closer to transform painting?
-Rc<Scene::Node> _applyTransformIfNeeded(SVG::Frag& svgFrag, RectAu viewBox, Rc<Scene::Node> content) {
+Rc<Scene::Node> _applyTransformIfNeeded(SvgFrag& svgFrag, RectAu viewBox, Rc<Scene::Node> content) {
     auto const& transform = *svgFrag.style().transform;
     if (not transform.has())
         return content;
@@ -172,18 +161,18 @@ Rc<Scene::Node> _applyTransformIfNeeded(SVG::Frag& svgFrag, RectAu viewBox, Rc<S
     return _applyTransform(transform, referenceBox, content);
 }
 
-Rc<Scene::Node> _paintSVGElement(SVG::GroupFrag::Element& element, Gfx::Color currentColor, RectAu viewBox) {
-    if (auto shape = element.is<SVG::ShapeFrag>()) {
+Rc<Scene::Node> _paintSVGElement(SvgGroupFrag::Element& element, Gfx::Color currentColor, RectAu viewBox) {
+    if (auto shape = element.is<SvgShapeFrag>()) {
         return _applyTransformIfNeeded(
             *shape, viewBox,
             shape->toSceneNode(currentColor)
         );
-    } else if (auto nestedGroup = element.is<SVG::GroupFrag>()) {
+    } else if (auto nestedGroup = element.is<SvgGroupFrag>()) {
         return _applyTransformIfNeeded(
             *nestedGroup, viewBox,
             _paintSVGAggregate(*nestedGroup, currentColor, viewBox)
         );
-    } else if (auto nestedRoot = element.is<SVGRootFrag>()) {
+    } else if (auto nestedRoot = element.is<SvgRootFrag>()) {
         return _applyTransformIfNeeded(
             *nestedRoot, viewBox,
             makeRc<Scene::Clip>(
@@ -204,7 +193,7 @@ Rc<Scene::Node> _paintSVGElement(SVG::GroupFrag::Element& element, Gfx::Color cu
     unreachable();
 }
 
-Rc<Scene::Stack> _paintSVGAggregate(SVG::GroupFrag& group, Gfx::Color currentColor, RectAu viewBox) {
+Rc<Scene::Stack> _paintSVGAggregate(SvgGroupFrag& group, Gfx::Color currentColor, RectAu viewBox) {
     // NOTE: A SVG group does not create a stacking context, but its easier to manipulate a group if itself is its own node
     Scene::Stack stack;
     for (auto& element : group.elements) {
@@ -213,9 +202,9 @@ Rc<Scene::Stack> _paintSVGAggregate(SVG::GroupFrag& group, Gfx::Color currentCol
     return makeRc<Scene::Stack>(std::move(stack));
 }
 
-Rc<Scene::Node> _paintSVGRoot(SVGRootFrag& svgRoot, Gfx::Color currentColor) {
+Rc<Scene::Node> _paintSVGRoot(SvgRootFrag& svgRoot, Gfx::Color currentColor) {
     // FIXME: Ugly cast because we need to upcast, should be fixed once we unify SVGRootFrag with Frag
-    SVGRoot const& rootBox = *static_cast<SVGRoot const*>(svgRoot.box.buf());
+    SvgRootBox const& rootBox = *static_cast<SvgRootBox const*>(svgRoot.box.buf());
 
     // https://drafts.csswg.org/css-transforms/#transform-box
     // SPEC: The reference box is positioned at the origin of the coordinate system established
@@ -258,7 +247,7 @@ static void _paintFrag(Frag& frag, Scene::Stack& stack, Opt<UsedBorders> usedBor
             node = makeRc<Scene::Clip>(node, std::move(path));
         }
         stack.add(node);
-    } else if (auto svgRoot = frag.content.is<SVGRootFrag>()) {
+    } else if (auto svgRoot = frag.content.is<SvgRootFrag>()) {
         if (min(frag.metrics.borderSize.x, frag.metrics.borderSize.y) == 0_au)
             return;
 
@@ -520,7 +509,7 @@ static Rc<Scene::Clip> _applyClip(Frag const& frag, Rc<Scene::Node> content) {
 // MARK: Transformations -------------------------------------------------------
 
 // https://www.w3.org/TR/css-transforms-1/#transform-box
-static RectAu _resolveTransformReferenceSVG(SVG::Frag& svgFrag, RectAu viewBox, TransformBox box) {
+static RectAu _resolveTransformReferenceSVG(SvgFrag& svgFrag, RectAu viewBox, TransformBox box) {
     // For SVG elements without associated CSS layout box, the used value
     // for content-box is fill-box and for border-box is stroke-box.
     return box.visit(
@@ -692,33 +681,33 @@ static void _paintStackingContext(Frag& frag, Scene::Stack& stack) {
     _paintFrag(frag, stack);
 
     // 2. the child stacking contexts with negative stack levels (most negative first).
-    _paintChildren(frag, stack, [](Style::SpecifiedValues const& s) -> bool {
-        return s.zIndex.unwrapOr<isize>(0) < 0;
+    _paintChildren(frag, stack, [](Style::ComputedValues const& cv) -> bool {
+        return cv.zIndex.unwrapOr<isize>(0) < 0;
     });
 
     // 3. the in-flow, non-inline-level, non-positioned descendants.
-    _paintChildren(frag, stack, [](Style::SpecifiedValues const& s) {
-        return s.zIndex == Keywords::AUTO and s.display != Display::INLINE and s.position == Keywords::STATIC;
+    _paintChildren(frag, stack, [](Style::ComputedValues const& cv) {
+        return cv.zIndex == Keywords::AUTO and cv.display != Display::INLINE and cv.position == Keywords::STATIC;
     });
 
     // 4. the non-positioned floats.
-    _paintChildren(frag, stack, [](Style::SpecifiedValues const& s) {
-        return s.zIndex == Keywords::AUTO and s.position == Keywords::STATIC and s.float_ != Float::NONE;
+    _paintChildren(frag, stack, [](Style::ComputedValues const& cv) {
+        return cv.zIndex == Keywords::AUTO and cv.position == Keywords::STATIC and cv.float_ != Float::NONE;
     });
 
     // 5. the in-flow, inline-level, non-positioned descendants, including inline tables and inline blocks.
-    _paintChildren(frag, stack, [](Style::SpecifiedValues const& s) {
-        return s.zIndex == Keywords::AUTO and s.display == Display::INLINE and s.position == Keywords::STATIC;
+    _paintChildren(frag, stack, [](Style::ComputedValues const& cv) {
+        return cv.zIndex == Keywords::AUTO and cv.display == Display::INLINE and cv.position == Keywords::STATIC;
     });
 
     // 6. the child stacking contexts with stack level 0 and the positioned descendants with stack level 0.
-    _paintChildren(frag, stack, [](Style::SpecifiedValues const& s) {
-        return s.zIndex.unwrapOr<isize>(0) == 0 and s.position != Keywords::STATIC;
+    _paintChildren(frag, stack, [](Style::ComputedValues const& cv) {
+        return cv.zIndex.unwrapOr<isize>(0) == 0 and cv.position != Keywords::STATIC;
     });
 
     // 7. the child stacking contexts with positive stack levels (least positive first).
-    _paintChildren(frag, stack, [](Style::SpecifiedValues const& s) {
-        return s.zIndex.unwrapOr<isize>(0) > 0;
+    _paintChildren(frag, stack, [](Style::ComputedValues const& cv) {
+        return cv.zIndex.unwrapOr<isize>(0) > 0;
     });
 }
 
@@ -760,8 +749,8 @@ export void wireframe(Frag& frag, Gfx::Canvas& g) {
 
 // MARK: Overlay ---------------------------------------------------------------
 
-export void overlay(Frag& frag, Gfx::Canvas& g, Gc::Ref<Dom::Node> node) {
-    if (frag.box->origin == node) {
+export void overlay(Frag& frag, Gfx::Canvas& g, Dom::OriginatingElement of) {
+    if (frag.box->origin == of) {
         Gfx::Borders border;
 
         // Margins
@@ -788,7 +777,7 @@ export void overlay(Frag& frag, Gfx::Canvas& g, Gc::Ref<Dom::Node> node) {
     }
 
     for (auto& c : frag.children())
-        overlay(c, g, node);
+        overlay(c, g, of);
 }
 
 } // namespace Vaev::Layout

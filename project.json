@@ -8,10 +8,6 @@
         "skift/karm": {
             "git": "https://codeberg.org/skift/karm.git",
             "tag": "main"
-        },
-        "skift/hideo": {
-            "git": "https://codeberg.org/skift/hideo.git",
-            "tag": "main"
         }
     }
 }

@@ -48,12 +48,13 @@ export struct Node : Tree<Node> {
     Ref::Url baseURI();
 
     Gc::Ptr<Document> ownerDocument();
+    Gc::Ptr<Document const> ownerDocument() const;
 
     virtual void _repr(Io::Emit&) const {}
 
     void repr(Io::Emit& e) const;
 
-    void hash(Hasher& h) const {
+    void hash(Meta::Derive<Hasher> auto& h) const {
         Karm::hash(h, reinterpret_cast<usize>(this));
     }
 

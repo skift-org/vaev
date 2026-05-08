@@ -16,6 +16,7 @@ import Vaev.Engine;
 import :protocol;
 
 using namespace Karm;
+using namespace Karm::Ref::Literals;
 
 namespace Vaev::WebDriver {
 
@@ -288,7 +289,7 @@ export struct WebDriver {
             )
         );
 
-        window->print(settings.toNative()) | ForEach([&](Print::Page& page) {
+        window->print(settings.derivePrintSettings()) | ForEach([&](Print::Page& page) {
             page.print(
                 *printer,
                 {.showBackgroundGraphics = true}

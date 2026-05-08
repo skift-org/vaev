@@ -237,11 +237,13 @@ export struct Media {
     }
 
     static Media forPrint(Print::Settings const& settings) {
+        auto pageSize = settings.pageSize();
+
         return {
             .type = MediaType::PRINT,
-            .width = Au{settings.paper.width},
-            .height = Au{settings.paper.height},
-            .aspectRatio = settings.paper.width / f64{settings.paper.height},
+            .width = pageSize.width,
+            .height = pageSize.height,
+            .aspectRatio = pageSize.width / pageSize.height,
             .orientation = settings.orientation,
 
             .resolution = Resolution{settings.scale, Resolution::X},
@@ -269,9 +271,9 @@ export struct Media {
             .prefersReducedData = ReducedData::NO_PREFERENCE,
 
             // NOTE: Deprecated Media Features
-            .deviceWidth = Au{settings.paper.width},
-            .deviceHeight = Au{settings.paper.height},
-            .deviceAspectRatio = settings.paper.width / settings.paper.height,
+            .deviceWidth = pageSize.width,
+            .deviceHeight = pageSize.height,
+            .deviceAspectRatio = pageSize.width / pageSize.height,
         };
     }
 
@@ -822,8 +824,10 @@ MediaQuery _parseMediaQueryInfix(Cursor<Css::Sst>& c) {
     eatWhitespace(c);
     while (not c.ended()) {
         if (c.skip(Css::Token::ident("and"))) {
+            eatWhitespace(c);
             lhs = MediaQuery::combineAnd(lhs, _parseMediaQueryLeaf(c));
         } else if (c.skip(Css::Token::ident("or"))) {
+            eatWhitespace(c);
             lhs = MediaQuery::combineOr(lhs, _parseMediaQueryLeaf(c));
         } else {
             break;
