@@ -339,8 +339,8 @@ static Rc<Scene::Clip> _applyClip(Frag const& frag, Rc<Scene::Node> content) {
     Math::Path result;
     auto& clip = frag.style().clip->unwrap();
 
-    // TODO: handle SVG cases (https://drafts.fxtf.org/css-masking/#typedef-geometry-box)
-    auto [referenceBox, radii] = clip.referenceBox.visit(Visitor{
+    // TODO: handle SVG cases (https://www.w3.org/TR/css-masking-1/#typedef-geometry-box)
+    auto [referenceBox, radii] = clip.referenceBox.visit(
         [&](Keywords::BorderBox const&) -> Pair<RectAu, RadiiAu> {
             return {frag.metrics.borderBox(), frag.metrics.radii};
         },
@@ -361,8 +361,8 @@ static Rc<Scene::Clip> _applyClip(Frag const& frag, Rc<Scene::Node> content) {
         },
         [&](Keywords::ViewBox const&) -> Pair<RectAu, RadiiAu> {
             return {frag.metrics.borderBox(), {0_au}};
-        },
-    });
+        }
+    );
 
     if (not clip.shape) {
         result.rect(referenceBox.round().cast<f64>(), radii.cast<f64>());
@@ -370,7 +370,7 @@ static Rc<Scene::Clip> _applyClip(Frag const& frag, Rc<Scene::Node> content) {
     }
 
     auto resolver = Resolver();
-    return clip.shape.unwrap().visit(Visitor{
+    return clip.shape.unwrap().visit(
         [&](Polygon const& polygon) {
             result.moveTo(
                 referenceBox.xy.cast<f64>() +
@@ -502,8 +502,8 @@ static Rc<Scene::Clip> _applyClip(Frag const& frag, Rc<Scene::Node> content) {
             result.path(path.path);
             result.offset(referenceBox.xy.cast<f64>());
             return makeRc<Scene::Clip>(content, result, path.fillRule);
-        },
-    });
+        }
+    );
 }
 
 // MARK: Transformations -------------------------------------------------------
@@ -513,22 +513,20 @@ static RectAu _resolveTransformReferenceSVG(SvgFrag& svgFrag, RectAu viewBox, Tr
     // For SVG elements without associated CSS layout box, the used value
     // for content-box is fill-box and for border-box is stroke-box.
     return box.visit(
-        Visitor{
-            [&](Keywords::ContentBox const&) {
-                return svgFrag.objectBoundingBox();
-            },
-            [&](Keywords::BorderBox const&) {
-                return svgFrag.strokeBoundingBox();
-            },
-            [&](Keywords::FillBox const&) {
-                return svgFrag.objectBoundingBox();
-            },
-            [&](Keywords::StrokeBox const&) {
-                return svgFrag.strokeBoundingBox();
-            },
-            [&](Keywords::ViewBox const&) {
-                return viewBox;
-            },
+        [&](Keywords::ContentBox const&) {
+            return svgFrag.objectBoundingBox();
+        },
+        [&](Keywords::BorderBox const&) {
+            return svgFrag.strokeBoundingBox();
+        },
+        [&](Keywords::FillBox const&) {
+            return svgFrag.objectBoundingBox();
+        },
+        [&](Keywords::StrokeBox const&) {
+            return svgFrag.strokeBoundingBox();
+        },
+        [&](Keywords::ViewBox const&) {
+            return viewBox;
         }
     );
 }
@@ -538,22 +536,20 @@ static RectAu _resolveTransformReferenceCSS(Metrics const& metrics, TransformBox
     // For elements with associated CSS layout box, the used value for fill-box
     // is content-box and for stroke-box and view-box is border-box.
     return box.visit(
-        Visitor{
-            [&](Keywords::ContentBox const&) {
-                return metrics.contentBox();
-            },
-            [&](Keywords::BorderBox const&) {
-                return metrics.borderBox();
-            },
-            [&](Keywords::FillBox const&) {
-                return metrics.contentBox();
-            },
-            [&](Keywords::StrokeBox const&) {
-                return metrics.borderBox();
-            },
-            [&](Keywords::ViewBox const&) {
-                return metrics.borderBox();
-            },
+        [&](Keywords::ContentBox const&) {
+            return metrics.contentBox();
+        },
+        [&](Keywords::BorderBox const&) {
+            return metrics.borderBox();
+        },
+        [&](Keywords::FillBox const&) {
+            return metrics.contentBox();
+        },
+        [&](Keywords::StrokeBox const&) {
+            return metrics.borderBox();
+        },
+        [&](Keywords::ViewBox const&) {
+            return metrics.borderBox();
         }
     );
 }
@@ -562,36 +558,32 @@ static Vec2Au _resolveTransformOrigin(RectAu referenceBox, TransformOrigin origi
     Resolver resolver{};
 
     auto x = origin.xOffset.visit(
-        Visitor{
-            [&](Keywords::Left) {
-                return referenceBox.start();
-            },
-            [&](Keywords::Right) {
-                return referenceBox.end();
-            },
-            [&](Keywords::Center) {
-                return referenceBox.center().x;
-            },
-            [&](CalcValue<PercentOr<Length>> value) {
-                return referenceBox.start() + resolver.resolve(value, referenceBox.width);
-            }
+        [&](Keywords::Left) {
+            return referenceBox.start();
+        },
+        [&](Keywords::Right) {
+            return referenceBox.end();
+        },
+        [&](Keywords::Center) {
+            return referenceBox.center().x;
+        },
+        [&](CalcValue<PercentOr<Length>> value) {
+            return referenceBox.start() + resolver.resolve(value, referenceBox.width);
         }
     );
 
     auto y = origin.yOffset.visit(
-        Visitor{
-            [&](Keywords::Top) {
-                return referenceBox.top();
-            },
-            [&](Keywords::Bottom) {
-                return referenceBox.bottom();
-            },
-            [&](Keywords::Center) {
-                return referenceBox.center().y;
-            },
-            [&](CalcValue<PercentOr<Length>> value) {
-                return referenceBox.top() + resolver.resolve(value, referenceBox.height);
-            }
+        [&](Keywords::Top) {
+            return referenceBox.top();
+        },
+        [&](Keywords::Bottom) {
+            return referenceBox.bottom();
+        },
+        [&](Keywords::Center) {
+            return referenceBox.center().y;
+        },
+        [&](CalcValue<PercentOr<Length>> value) {
+            return referenceBox.top() + resolver.resolve(value, referenceBox.height);
         }
     );
 
@@ -606,50 +598,48 @@ static Math::Trans2f _resolveTransform(RectAu referenceBox, Vec2Au origin, Slice
 
     for (auto const& transform : transforms) {
         auto trans = transform.visit(
-            Visitor{
-                [&](MatrixTransform const& t) {
-                    return Math::Trans2f{
-                        resolver.resolve(t.values[0]),
-                        resolver.resolve(t.values[1]),
-                        resolver.resolve(t.values[2]),
-                        resolver.resolve(t.values[3]),
-                        resolver.resolve(t.values[4]),
-                        resolver.resolve(t.values[5]),
-                    };
-                },
-                [&](TranslateTransform const& t) {
-                    return Math::Trans2f::translate({
-                        resolver.resolve(t.x, referenceBox.width).cast<f64>(),
-                        resolver.resolve(t.y, referenceBox.height).cast<f64>(),
-                    });
-                },
-                [&](ScaleTransform const& t) {
-                    return Math::Trans2f::scale({
-                        resolver.resolve(t.x),
-                        resolver.resolve(t.y),
-                    });
-                },
-                [&](RotateTransform const& t) {
-                    return Math::Trans2f::rotate(resolver.resolve(t.value).value());
-                },
-                [&](SkewTransform const& t) {
-                    return Math::Trans2f::skew({
-                        Math::tan(resolver.resolve(t.x).value()),
-                        Math::tan(resolver.resolve(t.y).value()),
-                    });
-                },
-                [&](SkewXTransform const& t) {
-                    return Math::Trans2f::skew({
-                        Math::tan(resolver.resolve(t.value).value()),
-                        0,
-                    });
-                },
-                [&](SkewYTransform const& t) {
-                    return Math::Trans2f::skew({
-                        0,
-                        Math::tan(resolver.resolve(t.value).value()),
-                    });
-                }
+            [&](MatrixTransform const& t) {
+                return Math::Trans2f{
+                    resolver.resolve(t.values[0]),
+                    resolver.resolve(t.values[1]),
+                    resolver.resolve(t.values[2]),
+                    resolver.resolve(t.values[3]),
+                    resolver.resolve(t.values[4]),
+                    resolver.resolve(t.values[5]),
+                };
+            },
+            [&](TranslateTransform const& t) {
+                return Math::Trans2f::translate({
+                    resolver.resolve(t.x, referenceBox.width).cast<f64>(),
+                    resolver.resolve(t.y, referenceBox.height).cast<f64>(),
+                });
+            },
+            [&](ScaleTransform const& t) {
+                return Math::Trans2f::scale({
+                    resolver.resolve(t.x),
+                    resolver.resolve(t.y),
+                });
+            },
+            [&](RotateTransform const& t) {
+                return Math::Trans2f::rotate(resolver.resolve(t.value).value());
+            },
+            [&](SkewTransform const& t) {
+                return Math::Trans2f::skew({
+                    Math::tan(resolver.resolve(t.x).value()),
+                    Math::tan(resolver.resolve(t.y).value()),
+                });
+            },
+            [&](SkewXTransform const& t) {
+                return Math::Trans2f::skew({
+                    Math::tan(resolver.resolve(t.value).value()),
+                    0,
+                });
+            },
+            [&](SkewYTransform const& t) {
+                return Math::Trans2f::skew({
+                    0,
+                    Math::tan(resolver.resolve(t.value).value()),
+                });
             }
         );
 
@@ -749,7 +739,7 @@ export void wireframe(Frag& frag, Gfx::Canvas& g) {
 
 // MARK: Overlay ---------------------------------------------------------------
 
-export void overlay(Frag& frag, Gfx::Canvas& g, Dom::OriginatingElement of) {
+export void overlay(Math::Rectf viewport, Frag& frag, Gfx::Canvas& g, Dom::OriginatingElement of) {
     if (frag.box->origin == of) {
         Gfx::Borders border;
 
@@ -772,12 +762,39 @@ export void overlay(Frag& frag, Gfx::Canvas& g, Dom::OriginatingElement of) {
         border.paint(g, frag.metrics.paddingBox().cast<f64>());
 
         // Content Box
+        auto contentBox = frag.metrics.contentBox().cast<f64>();
         g.fillStyle(Gfx::BLUE.withOpacity(0.5));
-        g.fill(frag.metrics.contentBox().cast<f64>());
+        g.fill(contentBox);
+
+        g.strokeStyle(Gfx::stroke(Gfx::CYAN).withDash({2, 2}));
+        g.stroke(Math::Edgef{
+            contentBox.start(),
+            viewport.top(),
+            contentBox.start(),
+            viewport.bottom(),
+        });
+        g.stroke(Math::Edgef{
+            contentBox.end(),
+            viewport.top(),
+            contentBox.end(),
+            viewport.bottom(),
+        });
+        g.stroke(Math::Edgef{
+            viewport.start(),
+            contentBox.top(),
+            viewport.end(),
+            contentBox.top(),
+        });
+        g.stroke(Math::Edgef{
+            viewport.start(),
+            contentBox.bottom(),
+            viewport.end(),
+            contentBox.bottom(),
+        });
     }
 
     for (auto& c : frag.children())
-        overlay(c, g, of);
+        overlay(viewport, c, g, of);
 }
 
 } // namespace Vaev::Layout

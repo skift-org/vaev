@@ -16,7 +16,7 @@ static auto debugMatching = Debug::Flag::debug("web-style-matching", "Log failur
 static auto featureNthChild = Debug::Flag::feature("web-style-nth_child", "Enable :nth-child() and related selectors");
 
 static bool _matchSelector(Selector const& selector, Gc::Ref<Dom::Element> element, Opt<Symbol> const& pseudoElement);
-export Opt<Spec> matchSelector(Selector const& selector, Gc::Ref<Dom::Element> element, Opt<Symbol> const& pseudoElement);
+export Opt<Specificity> matchSelector(Selector const& selector, Gc::Ref<Dom::Element> element, Opt<Symbol> const& pseudoElement);
 
 // https://www.w3.org/TR/selectors-4/#descendant-combinators
 static bool _matchDescendant(Selector const& selector, Gc::Ref<Dom::Element> element) {
@@ -328,20 +328,22 @@ static bool _match(PseudoClassSelector const& selector, Gc::Ref<Dom::Element> el
 
 static bool _matchSelector(Selector const& selector, Gc::Ref<Dom::Element> element, Opt<Symbol> const& pseudoElement) {
     // Route the selector to the appropriate matching function.
-    return selector.visit(Visitor{[&](auto const& s) {
-        if constexpr (requires { _match(s, element, pseudoElement); })
-            return _match(s, element, pseudoElement);
-        if constexpr (requires { _match(s, element); })
-            return _match(s, element);
+    return selector.visit(
+        [&](auto const& s) {
+            if constexpr (requires { _match(s, element, pseudoElement); })
+                return _match(s, element, pseudoElement);
+            if constexpr (requires { _match(s, element); })
+                return _match(s, element);
 
-        logWarnIf(debugMatching, "unimplemented selector: {}", s);
-        return false;
-    }});
+            logWarnIf(debugMatching, "unimplemented selector: {}", s);
+            return false;
+        }
+    );
 }
 
-export Opt<Spec> matchSelector(Selector const& selector, Gc::Ref<Dom::Element> element, Opt<Symbol> const& pseudoElement = NONE) {
+export Opt<Specificity> matchSelector(Selector const& selector, Gc::Ref<Dom::Element> element, Opt<Symbol> const& pseudoElement = NONE) {
     if (auto n = selector.is<Nfix>(); n and n->type == Nfix::OR) {
-        Opt<Spec> specificity;
+        Opt<Specificity> specificity;
         for (auto& inner : n->inners) {
             if (_matchSelector(inner, element, pseudoElement))
                 specificity = max(specificity, spec(inner));
