@@ -48,6 +48,7 @@ An [architecture diagram](doc/diagrams.tldr) is available next to this file. It'
 ## Authors
 
  - [Lou !](https://github.com/Louciole)
+ - [Lucien Fiorini](https://github.com/ananas-dev)
  - [LuneMercier](https://github.com/LuneMercier)
  - [Paulo Medeiros](https://github.com/pauloamed)
  - [Sleepy Monax](https://github.com/sleepy-monax)
