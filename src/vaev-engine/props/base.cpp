@@ -57,10 +57,30 @@ export struct Property : Meta::NoCopy {
 
     using enum Options;
 
+    enum struct ComputationPhase {
+        /// For custom properties only.
+        CUSTOM_PROPERTY,
+
+        /// For properties which font-* properties depend on,
+        /// they must not accept <length> as their value.
+        PRE_FONT,
+
+        /// For properties that are used to decide the font-face.
+        /// If they accept <length>, it must be computed using the
+        /// parent's font-face.
+        FONT,
+
+        /// For properties that can accept <length> as a value.
+        /// Should be the default for most cases.
+        NORMAL,
+
+        /// For properties with a dependency on a property within the normal pass.
+        LATE,
+    };
+
     // https://drafts.css-houdini.org/css-properties-values-api/#custom-property-registration
     struct Registration : Meta::NoCopy {
         Opt<Weak<Registration>> _self;
-        Integer resolutionOrder = 0;
 
         Rc<Registration> self() const {
             return _self
@@ -73,8 +93,10 @@ export struct Property : Meta::NoCopy {
 
         virtual Symbol name() const = 0;
 
-        virtual Vec<Symbol> dependencies() const {
-            return {};
+        /// The pass in which the property belongs, non-trivial
+        /// overrides of this method should be justified with a comment.
+        virtual ComputationPhase computationPhase() const {
+            return ComputationPhase::NORMAL;
         }
 
         // https://drafts.csswg.org/css-cascade-4/#legacy-name-alias
@@ -96,7 +118,7 @@ export struct Property : Meta::NoCopy {
             //       flag should override this method with a faster implementation.
             if (flags().has(INHERITED))
                 logFatal("property {#} marked as INHERITED is using the slow fallback path. override inherit()!", name());
-            load(parent)->apply(child);
+            load(parent)->apply(parent, child);
         }
 
         virtual Res<Rc<Property>> parse(Cursor<Css::Sst>& c) const = 0;
@@ -130,13 +152,8 @@ export struct Property : Meta::NoCopy {
         return {};
     }
 
-    virtual void apply(ComputedValues&) const {
+    virtual void apply([[maybe_unused]] ComputedValues const& parent, [[maybe_unused]] ComputedValues& child) const {
         logFatal("longhand property {#} is missing apply() implementation", registration->name());
-    }
-
-    virtual void apply(ComputedValues const& parent, ComputedValues& child) const {
-        (void)parent;
-        apply(child);
     }
 
     virtual void repr(Io::Emit& e) const = 0;
@@ -183,9 +200,7 @@ struct CustomProperty : Property {
     struct Registration : Property::Registration {
         Symbol _name;
 
-        Registration(Symbol name) : _name(name) {
-            resolutionOrder = -1;
-        }
+        Registration(Symbol name) : _name(name) {}
 
         Symbol name() const override {
             return _name;
@@ -198,6 +213,10 @@ struct CustomProperty : Property {
                 ALL_EXCLUDED,
                 BULK_INHERITED,
             };
+        }
+
+        ComputationPhase computationPhase() const override {
+            return ComputationPhase::CUSTOM_PROPERTY;
         }
 
         Rc<Property> initial() const override {
@@ -227,8 +246,8 @@ struct CustomProperty : Property {
     CustomProperty(Rc<Property::Registration> registration, Css::Content value)
         : Property(registration), _value(value) {}
 
-    void apply(ComputedValues& child) const override {
-        child.setCustomProp(registration->name(), _value);
+    void apply([[maybe_unused]] ComputedValues const& parent, ComputedValues& c) const override {
+        c.setCustomProp(registration->name(), _value);
     }
 
     void repr(Io::Emit& e) const override {
@@ -447,13 +466,13 @@ struct DefaultedProperty : Property {
             // The inherit CSS-wide keyword represents the property’s
             // computed value on the parent element.
             // https://drafts.csswg.org/css-cascade/#inherit
-            registration->load(parent)->apply(child);
+            registration->load(parent)->apply(parent, child);
         } else if (_value == Default::UNSET) {
             // The unset CSS-wide keyword acts as either inherit or initial,
             // depending on whether the property is inherited or not.
             // https://drafts.csswg.org/css-cascade/#inherit-initial
             if (registration->flags().has(INHERITED))
-                registration->load(parent)->apply(child);
+                registration->load(parent)->apply(parent, child);
             else
                 registration->initial()->apply(parent, child);
 
@@ -589,48 +608,6 @@ export struct RegisteredPropertySet {
 
     Opt<Rc<Property::Registration>> resolveRegistration(Str propertyName, Flags<Options> options) {
         return resolveRegistration(Symbol::from(propertyName), options);
-    }
-
-    void resolvePropertyDependencies() {
-        auto resolve = [&](this auto& self, Rc<Property::Registration>& reg, Set<Symbol>& visited) -> void {
-            if (reg->flags().has(Property::CUSTOM_PROPERTY)) {
-                reg->resolutionOrder = -1;
-                return;
-            }
-
-            if (visited.contains(reg->name())) {
-                logFatal("circular dependency detected: {}", visited);
-                return;
-            }
-
-            if (reg->resolutionOrder != 0)
-                return;
-
-            visited.add(reg->name());
-
-            Integer maxPriority = 0;
-
-            for (auto dep : reg->dependencies()) {
-                auto prop = this->resolveRegistration(dep, {});
-                if (not prop) {
-                    logFatal("unresolved dependency: {}", dep);
-                    return;
-                }
-
-                self(*prop, visited);
-
-                maxPriority = max(maxPriority, (*prop)->resolutionOrder);
-            }
-
-            reg->resolutionOrder = maxPriority + 1;
-            visited.remove(reg->name());
-        };
-
-        Set<Symbol> visited = {};
-        for (Rc<Property::Registration>& r : _registrations.mutIterValue()) {
-            if (r->resolutionOrder == 0)
-                resolve(r, visited);
-        }
     }
 
     // MARK: Initial -----------------------------------------------------------

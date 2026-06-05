@@ -43,7 +43,7 @@ export struct BackgroundColorProperty : Property {
     BackgroundColorProperty(Rc<Property::Registration> registration, Color value)
         : Property(registration), _value(value) {}
 
-    void apply(ComputedValues& c) const override {
+    void apply([[maybe_unused]] ComputedValues const& parent, ComputedValues& c) const override {
         c.backgrounds.cow().color = _value;
     }
 
@@ -89,7 +89,7 @@ export struct BackgroundAttachmentProperty : Property {
     BackgroundAttachmentProperty(Rc<Property::Registration> registration, Vec<BackgroundAttachment> value)
         : Property(registration), _value(std::move(value)) {}
 
-    void apply(ComputedValues& c) const override {
+    void apply([[maybe_unused]] ComputedValues const& parent, ComputedValues& c) const override {
         auto& layers = c.backgrounds.cow().layers;
         layers.resize(max(layers.len(), _value.len()));
         for (usize i = 0; i < _value.len(); ++i)
@@ -127,7 +127,7 @@ export struct BackgroundImageProperty : Property {
     BackgroundImageProperty(Rc<Property::Registration> registration, Vec<Image> value)
         : Property(registration), _value(std::move(value)) {}
 
-    void apply(ComputedValues&) const override {
+    void apply(ComputedValues const&, ComputedValues&) const override {
         // TODO
     }
 
@@ -162,9 +162,10 @@ export struct BackgroundPositionProperty : Property {
     BackgroundPositionProperty(Rc<Property::Registration> registration, Vec<BackgroundPosition> value)
         : Property(registration), _value(std::move(value)) {}
 
-    void apply(ComputedValues&) const override {
+    void apply(ComputedValues const&, ComputedValues&) const override {
         // TODO
     }
+
 
     void repr(Io::Emit& e) const override {
         e("{}", _value);
@@ -198,7 +199,7 @@ export struct BackgroundRepeatProperty : Property {
         : Property(registration),
           _value(std::move(value)) {}
 
-    void apply(ComputedValues&) const override {
+    void apply(ComputedValues const&, ComputedValues&) const override {
         // TODO
     }
 
@@ -219,7 +220,7 @@ export struct BackgroundProperty : Property {
         }
 
         Rc<Property> initial() const override {
-            return makeRc<BackgroundProperty>(self(), BackgroundProps{TRANSPARENT});
+            return makeRc<BackgroundProperty>(self(), SpecifiedBackground{TRANSPARENT});
         }
 
         Rc<Property> load(ComputedValues const& c) const override {
@@ -227,15 +228,15 @@ export struct BackgroundProperty : Property {
         }
 
         Res<Rc<Property>> parse(Cursor<Css::Sst>& c) const override {
-            BackgroundProps value;
+            SpecifiedBackground value;
             value.color = try$(parseValue<Color>(c));
             return Ok(makeRc<BackgroundProperty>(self(), std::move(value)));
         }
     };
 
-    BackgroundProps _value;
+    SpecifiedBackground _value;
 
-    BackgroundProperty(Rc<Property::Registration> registration, BackgroundProps value)
+    BackgroundProperty(Rc<Property::Registration> registration, SpecifiedBackground value)
         : Property(registration), _value(std::move(value)) {}
 
     Vec<Rc<Property>> expandShorthand(RegisteredPropertySet& registry, ComputedValues const&, ComputedValues&) const override {
@@ -285,12 +286,9 @@ export struct ColorProperty : Property {
     ColorProperty(Rc<Property::Registration> registration, Color value)
         : Property(registration), _value(value) {}
 
-    void apply(ComputedValues& c) const override {
-        c.color = resolve(_value, Gfx::BLACK);
-    }
-
-    void apply(ComputedValues const& parent, ComputedValues& c) const override {
-        c.color = resolve(_value, parent.color);
+    void apply(ComputedValues const& parent, ComputedValues& child) const override {
+        // In the color property, the used value of currentcolor is the resolved inherited value.
+        child.color = resolve(_value, parent.color);
     }
 
     void repr(Io::Emit& e) const override {

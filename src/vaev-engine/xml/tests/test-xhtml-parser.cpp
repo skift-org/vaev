@@ -209,7 +209,7 @@ test$("parse-comment") {
     auto comment = el->firstChild()->is<Comment>();
     expectNe$(comment, nullptr);
     expect$(comment->nodeType() == NodeType::COMMENT);
-    expect$(comment->data() == " comment ");
+    expect$(comment->data() == " comment "s);
 
     return Ok();
 }
@@ -226,7 +226,7 @@ test$("parse-doctype") {
 
     auto doctype = dom->firstChild()->is<DocumentType>();
     expectNe$(doctype, nullptr);
-    expect$(doctype->name == "html");
+    expect$(doctype->name == "html"s);
 
     return Ok();
 }
@@ -238,7 +238,7 @@ test$("parse-title") {
     auto s = Io::SScan("<title>the title</title>");
     auto dom = gc.alloc<Dom::Document>(Ref::Url());
     try$(p.parse(s, Html::NAMESPACE, *dom));
-    expect$(dom->title() == "the title");
+    expect$(dom->title() == "the title"s);
     return Ok();
 }
 
@@ -263,7 +263,7 @@ test$("parse-comment-with-gt-symb") {
     auto comment = title->nextSibling()->is<Comment>();
     expectNe$(comment, nullptr);
     expect$(comment->nodeType() == NodeType::COMMENT);
-    expect$(comment->data() == " a b <meta> c d ");
+    expect$(comment->data() == " a b <meta> c d "s);
 
     return Ok();
 }
@@ -302,6 +302,36 @@ test$("parse-xml-different-namespace") {
     auto rect = svg->firstChild()->is<Element>();
     expectNe$(rect, nullptr);
     expect$(rect->qualifiedName == Svg::RECT_TAG);
+
+    return Ok();
+}
+
+test$("parse-xml-prefixed-names") {
+    Gc::Heap gc;
+    Xml::XmlParser p{gc};
+
+    auto s = Io::SScan(
+        "<root xmlns:a=\"http://www.example.org/a\">"
+        "<child a:foo=\"bar\"/>"
+        "<a:item/>"
+        "</root>"
+    );
+    auto dom = gc.alloc<Dom::Document>(Ref::Url());
+    try$(p.parse(s, NONE, *dom));
+
+    auto root = dom->firstChild()->is<Element>();
+    expectNe$(root, nullptr);
+    expect$((root->qualifiedName == Dom::QualifiedName{NONE, "root"_sym}));
+
+    auto child = root->firstChild()->is<Element>();
+    expectNe$(child, nullptr);
+    expect$((child->qualifiedName == Dom::QualifiedName{NONE, "child"_sym}));
+    expect$(child->hasAttribute(Dom::QualifiedName{"http://www.example.org/a"_sym, "foo"_sym}));
+    expect$(child->getAttribute(Dom::QualifiedName{"http://www.example.org/a"_sym, "foo"_sym}) == "bar");
+
+    auto item = child->nextSibling()->is<Element>();
+    expectNe$(item, nullptr);
+    expect$((item->qualifiedName == Dom::QualifiedName{"http://www.example.org/a"_sym, "item"_sym}));
 
     return Ok();
 }

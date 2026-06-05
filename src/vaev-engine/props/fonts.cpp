@@ -26,6 +26,10 @@ export struct FontFamilyProperty : Property {
             return {INHERITED};
         }
 
+        ComputationPhase computationPhase() const override {
+            return ComputationPhase::FONT;
+        }
+
         Rc<Property> initial() const override {
             return makeRc<FontFamilyProperty>(self(), Vec<FontFamily>{"sans-serif"_sym});
         }
@@ -57,7 +61,7 @@ export struct FontFamilyProperty : Property {
     FontFamilyProperty(Rc<Property::Registration> registration, Vec<FontFamily> value)
         : Property(registration), _value(std::move(value)) {}
 
-    void apply(ComputedValues& c) const override {
+    void apply([[maybe_unused]] ComputedValues const& parent, ComputedValues& c) const override {
         c.font.cow().families = _value;
     }
 
@@ -73,8 +77,20 @@ export struct FontWeightProperty : Property {
             return Properties::FONT_WEIGHT;
         }
 
+        Flags<Options> flags() const override {
+            return {INHERITED};
+        }
+
+        ComputationPhase computationPhase() const override {
+            return ComputationPhase::FONT;
+        }
+
         Rc<Property> initial() const override {
             return makeRc<FontWeightProperty>(self(), FontWeight{Gfx::FontWeight::REGULAR});
+        }
+
+        void inherit(ComputedValues const& parent, ComputedValues& child) const override {
+            child.font.cow().weight = parent.font->weight;
         }
 
         Rc<Property> load(ComputedValues const& c) const override {
@@ -90,10 +106,6 @@ export struct FontWeightProperty : Property {
 
     FontWeightProperty(Rc<Property::Registration> registration, FontWeight value)
         : Property(registration), _value(value) {}
-
-    void apply(ComputedValues& c) const override {
-        c.font.cow().weight = _value.resolve();
-    }
 
     void apply(ComputedValues const& parent, ComputedValues& c) const override {
         c.font.cow().weight = _value.resolve(parent.font->weight);
@@ -120,6 +132,10 @@ export struct FontWidthProperty : Property {
             return {INHERITED};
         }
 
+        ComputationPhase computationPhase() const override {
+            return ComputationPhase::FONT;
+        }
+
         Rc<Property> initial() const override {
             return makeRc<FontWidthProperty>(self(), FontWidth::NORMAL);
         }
@@ -142,7 +158,7 @@ export struct FontWidthProperty : Property {
     FontWidthProperty(Rc<Property::Registration> registration, FontWidth value)
         : Property(registration), _value(value) {}
 
-    void apply(ComputedValues& c) const override {
+    void apply([[maybe_unused]] ComputedValues const& parent, ComputedValues& c) const override {
         c.font.cow().width = _value;
     }
 
@@ -160,6 +176,10 @@ export struct FontStyleProperty : Property {
 
         Flags<Options> flags() const override {
             return {INHERITED};
+        }
+
+        ComputationPhase computationPhase() const override {
+            return ComputationPhase::FONT;
         }
 
         Rc<Property> initial() const override {
@@ -184,7 +204,7 @@ export struct FontStyleProperty : Property {
     FontStyleProperty(Rc<Property::Registration> registration, FontStyle value)
         : Property(registration), _value(value) {}
 
-    void apply(ComputedValues& c) const override {
+    void apply([[maybe_unused]] ComputedValues const& parent, ComputedValues& c) const override {
         c.font.cow().style = _value;
     }
 
@@ -202,6 +222,10 @@ export struct FontSizeProperty : Property {
 
         Flags<Options> flags() const override {
             return {INHERITED};
+        }
+
+        ComputationPhase computationPhase() const override {
+            return ComputationPhase::FONT;
         }
 
         Rc<Property> initial() const override {
@@ -226,7 +250,7 @@ export struct FontSizeProperty : Property {
     FontSizeProperty(Rc<Property::Registration> registration, FontSize value)
         : Property(registration), _value(value) {}
 
-    void apply(ComputedValues& c) const override {
+    void apply([[maybe_unused]] ComputedValues const& parent, ComputedValues& c) const override {
         c.font.cow().size = _value;
     }
 

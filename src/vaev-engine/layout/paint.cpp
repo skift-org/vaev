@@ -19,7 +19,7 @@ import :layout.table;
 
 namespace Vaev::Layout {
 
-Opt<Gfx::Borders> buildBorders(Metrics const& metrics, Style::ComputedValues const& style, Gfx::Color currentColor) {
+Opt<Gfx::Borders> buildBorders(Metrics const& metrics, Style::ComputedValues const& style) {
     if (metrics.borders.zero())
         return NONE;
 
@@ -37,15 +37,15 @@ Opt<Gfx::Borders> buildBorders(Metrics const& metrics, Style::ComputedValues con
     borders.styles[2] = bordersStyle.bottom.style;
     borders.styles[3] = bordersStyle.start.style;
 
-    borders.fills[0] = Vaev::resolve(bordersStyle.top.color, currentColor);
-    borders.fills[1] = Vaev::resolve(bordersStyle.end.color, currentColor);
-    borders.fills[2] = Vaev::resolve(bordersStyle.bottom.color, currentColor);
-    borders.fills[3] = Vaev::resolve(bordersStyle.start.color, currentColor);
+    borders.fills[0] = resolve(bordersStyle.top.color, style.color);
+    borders.fills[1] = resolve(bordersStyle.end.color, style.color);
+    borders.fills[2] = resolve(bordersStyle.bottom.color, style.color);
+    borders.fills[3] = resolve(bordersStyle.start.color, style.color);
 
     return borders;
 }
 
-Opt<Gfx::Borders> buildBorders(UsedBorders const& border, Gfx::Color currentColor) {
+Opt<Gfx::Borders> buildBorders(UsedBorders const& border) {
     if (border.map(
                   [](auto b) {
                       return b.width;
@@ -66,15 +66,15 @@ Opt<Gfx::Borders> buildBorders(UsedBorders const& border, Gfx::Color currentColo
     borders.styles[2] = border.bottom.style;
     borders.styles[3] = border.start.style;
 
-    borders.fills[0] = Vaev::resolve(border.top.color, currentColor);
-    borders.fills[1] = Vaev::resolve(border.end.color, currentColor);
-    borders.fills[2] = Vaev::resolve(border.bottom.color, currentColor);
-    borders.fills[3] = Vaev::resolve(border.start.color, currentColor);
+    borders.fills[0] = border.top.color;
+    borders.fills[1] = border.end.color;
+    borders.fills[2] = border.bottom.color;
+    borders.fills[3] = border.start.color;
 
     return borders;
 }
 
-Opt<Gfx::Outline> buildOutline(Metrics const& metrics, Style::ComputedValues const& style, Gfx::Color currentColor) {
+Opt<Gfx::Outline> buildOutline(Metrics const& metrics, Style::ComputedValues const& style) {
     if (metrics.outlineWidth == 0_au)
         return NONE;
 
@@ -90,15 +90,7 @@ Opt<Gfx::Outline> buildOutline(Metrics const& metrics, Style::ComputedValues con
         outline.style = outlineStyle.style.unwrap<Gfx::BorderStyle>();
     }
 
-    if (outlineStyle.color.is<Keywords::Auto>()) {
-        if (outlineStyle.style.is<Keywords::Auto>()) {
-            outline.fill = resolve(Color(SystemColor::ACCENT_COLOR), currentColor);
-        } else {
-            outline.fill = currentColor;
-        }
-    } else {
-        outline.fill = resolve(outlineStyle.color.unwrap<Color>(), currentColor);
-    }
+    outline.fill = resolve(outlineStyle.color, style.color);
 
     return outline;
 }
@@ -114,18 +106,17 @@ static void _paintFragBordersAndBackgrounds(Frag& frag, Scene::Stack& stack, Opt
     auto const& cssBackground = frag.style().backgrounds;
 
     Vec<Gfx::Fill> backgrounds;
-    auto color = Vaev::resolve(cssBackground->color, frag.style().color);
+    auto color = resolve(cssBackground->color, frag.style().color);
 
     if (color.alpha != 0) {
         if (not frag.box->isRootElementPrincipalBox())
             backgrounds.pushBack(color);
     }
 
-    auto currentColor = Vaev::resolve(frag.style().color, color);
     auto bordersWithoutRadii = usedBorders
-                                   ? buildBorders(*usedBorders, Vaev::resolve(frag.style().color, currentColor))
-                                   : buildBorders(frag.metrics, frag.style(), Vaev::resolve(frag.style().color, currentColor));
-    auto outline = buildOutline(frag.metrics, frag.style(), Vaev::resolve(frag.style().color, currentColor));
+                                   ? buildBorders(*usedBorders)
+                                   : buildBorders(frag.metrics, frag.style());
+    auto outline = buildOutline(frag.metrics, frag.style());
     Math::Rectf bound = frag.metrics.borderBox().round().cast<f64>();
 
     if (any(backgrounds) or bordersWithoutRadii or outline) {
@@ -146,8 +137,8 @@ static void _paintFragBordersAndBackgrounds(Frag& frag, Scene::Stack& stack, Opt
 static void _establishStackingContext(Frag& frag, Scene::Stack& stack);
 static void _paintStackingContext(Frag& frag, Scene::Stack& stack);
 
-Rc<Scene::Node> _paintSVGRoot(SvgRootFrag& svgRoot, Gfx::Color currentColor);
-Rc<Scene::Stack> _paintSVGAggregate(SvgGroupFrag& group, Gfx::Color currentColor, RectAu viewBox);
+Rc<Scene::Node> _paintSVGRoot(SvgRootFrag& svgRoot);
+Rc<Scene::Stack> _paintSVGAggregate(SvgGroupFrag& group, RectAu viewBox);
 
 static RectAu _resolveTransformReferenceSVG(SvgFrag& svgFrag, RectAu viewBox, TransformBox box);
 static Rc<Scene::Node> _applyTransform(Vaev::Style::TransformProps const& transform, RectAu referenceBox, Rc<Scene::Node> content);
@@ -161,23 +152,93 @@ Rc<Scene::Node> _applyTransformIfNeeded(SvgFrag& svgFrag, RectAu viewBox, Rc<Sce
     return _applyTransform(transform, referenceBox, content);
 }
 
-Rc<Scene::Node> _paintSVGElement(SvgGroupFrag::Element& element, Gfx::Color currentColor, RectAu viewBox) {
+Opt<Gfx::Stroke> _resolveStroke(SvgShapeFrag& frag, SvgProps const& style) {
+    Opt<Gfx::Color> color = style.stroke.map([&](Color const& stroke) {
+        return resolve(stroke, frag.style().color);
+    });
+
+    if (not color)
+        return NONE;
+
+    if (Math::epsilonEq(style.strokeOpacity, 0.))
+        return NONE;
+
+    color = color->withOpacity(style.strokeOpacity);
+
+    if (frag.strokeWidth == 0_au)
+        return NONE;
+
+    return Gfx::Stroke{*color, static_cast<f64>(frag.strokeWidth)};
+}
+
+Rc<Scene::Node> _paintSvgRectangle(Math::Rectf rect, Opt<Gfx::Fill> fill, Opt<Gfx::Stroke> const& stroke) {
+    Gfx::Borders borders;
+    if (stroke) {
+        borders = Gfx::Borders{
+            Math::Radiif{},
+            Math::Insetsf{stroke->width},
+            Array<Gfx::Fill, 4>::fill(stroke->fill),
+            Array<Gfx::BorderStyle, 4>::fill(Gfx::BorderStyle::SOLID),
+        };
+
+        // FIXME: needed due to mismatch between SVG's and Scene's box model
+        // svg's stroke's center is at the shape's edges
+        rect.width += stroke->width;
+        rect.height += stroke->width;
+        rect.x -= stroke->width / 2;
+        rect.y -= stroke->width / 2;
+    }
+
+    return makeRc<Scene::Box>(
+        Math::Rectf{rect.x, rect.y, rect.width, rect.height},
+        borders,
+        Gfx::Outline{},
+        fill ? Vec<Gfx::Fill>{fill.unwrap()} : Vec<Gfx::Fill>{}
+    );
+}
+
+Rc<Scene::Node> _paintSvgCircle(Math::Ellipsef circle, Opt<Gfx::Fill> fill, Opt<Gfx::Stroke> stroke) {
+    Math::Path path;
+    path.ellipse(circle);
+    return makeRc<Scene::Shape>(path, stroke, fill);
+}
+
+Rc<Scene::Node> _paintSvgShapeElement(SvgShapeFrag& frag) {
+    auto const& style = *frag.box->style->svg;
+
+    Opt<Gfx::Color> resolvedFill = style.fill.map([&](auto fill) {
+        return resolve(fill, frag.style().color).withOpacity(style.fillOpacity);
+    });
+
+    Opt<Gfx::Stroke> resolvedStroke = _resolveStroke(frag, style);
+
+    if (auto rect = frag.shape.is<RectAu>()) {
+        return _paintSvgRectangle(rect->cast<f64>(), resolvedFill, resolvedStroke);
+    } else if (auto circle = frag.shape.is<EllipseAu>()) {
+        return _paintSvgCircle(circle->cast<f64>(), resolvedFill, resolvedStroke);
+    } else if (auto path = frag.shape.is<Rc<Math::Path>>()) {
+        return makeRc<Scene::Shape>(*(*path), resolvedStroke, resolvedFill);
+    };
+    unreachable();
+}
+
+Rc<Scene::Node> _paintSVGElement(SvgGroupFrag::Element& element, RectAu viewBox) {
     if (auto shape = element.is<SvgShapeFrag>()) {
         return _applyTransformIfNeeded(
             *shape, viewBox,
-            shape->toSceneNode(currentColor)
+            _paintSvgShapeElement(*shape)
         );
     } else if (auto nestedGroup = element.is<SvgGroupFrag>()) {
         return _applyTransformIfNeeded(
             *nestedGroup, viewBox,
-            _paintSVGAggregate(*nestedGroup, currentColor, viewBox)
+            _paintSVGAggregate(*nestedGroup, viewBox)
         );
     } else if (auto nestedRoot = element.is<SvgRootFrag>()) {
         return _applyTransformIfNeeded(
             *nestedRoot, viewBox,
             makeRc<Scene::Clip>(
-                _paintSVGRoot(*nestedRoot, currentColor),
-                nestedRoot->boundingBox.toRect().cast<f64>()
+                _paintSVGRoot(*nestedRoot),
+                nestedRoot->boundingBox.cast<f64>()
             )
         );
     } else if (auto foreignObject = element.is<::Box<Frag>>()) {
@@ -193,31 +254,29 @@ Rc<Scene::Node> _paintSVGElement(SvgGroupFrag::Element& element, Gfx::Color curr
     unreachable();
 }
 
-Rc<Scene::Stack> _paintSVGAggregate(SvgGroupFrag& group, Gfx::Color currentColor, RectAu viewBox) {
+Rc<Scene::Stack> _paintSVGAggregate(SvgGroupFrag& group, RectAu viewBox) {
     // NOTE: A SVG group does not create a stacking context, but its easier to manipulate a group if itself is its own node
     Scene::Stack stack;
     for (auto& element : group.elements) {
-        stack.add(_paintSVGElement(element, currentColor, viewBox));
+        stack.add(_paintSVGElement(element, viewBox));
     }
     return makeRc<Scene::Stack>(std::move(stack));
 }
 
-Rc<Scene::Node> _paintSVGRoot(SvgRootFrag& svgRoot, Gfx::Color currentColor) {
-    // FIXME: Ugly cast because we need to upcast, should be fixed once we unify SVGRootFrag with Frag
-    SvgRootBox const& rootBox = *static_cast<SvgRootBox const*>(svgRoot.box.buf());
+Rc<Scene::Node> _paintSVGRoot(SvgRootFrag& svgRoot) {
+    auto rootBoxViewBox = svgRoot.box->style->svg->viewBox;
 
     // https://drafts.csswg.org/css-transforms/#transform-box
     // SPEC: The reference box is positioned at the origin of the coordinate system established
     // by the viewBox attribute.
-    // NOTE: Origin here was interpreted as (0, 0) instead of (minX, minY).
     // NOTE: It is not clear whether '(SPEC) the nearest SVG viewport' includes the root's viewBox itself.
     // We assume it doesn't.
     RectAu viewBox =
-        rootBox.viewBox
-            ? Math::Rect<f64>{Math::Vec2<f64>{rootBox.viewBox->width, rootBox.viewBox->height}}.cast<Au>()
-            : svgRoot.boundingBox.toRect();
+        rootBoxViewBox
+            ? Math::Rectf{rootBoxViewBox->width, rootBoxViewBox->height}.cast<Au>()
+            : svgRoot.boundingBox;
 
-    auto content = _paintSVGAggregate(svgRoot, currentColor, viewBox);
+    auto content = _paintSVGAggregate(svgRoot, viewBox);
     return makeRc<Scene::Transform>(content, svgRoot.transf);
 }
 
@@ -229,8 +288,8 @@ static void _paintFrag(Frag& frag, Scene::Stack& stack, Opt<UsedBorders> usedBor
 
     _paintFragBordersAndBackgrounds(frag, stack, usedBorders);
 
-    if (auto ic = frag.box->content.is<InlineBox>()) {
-        stack.add(makeRc<Scene::Text>(frag.metrics.contentBox().topStart().cast<f64>(), ic->prose));
+    if (auto prose = frag.box->content.is<Rc<Gfx::Prose>>()) {
+        stack.add(makeRc<Scene::Text>(frag.metrics.contentBox().topStart().cast<f64>(), *prose));
     } else if (auto image = frag.box->content.is<Rc<Scene::Node>>()) {
         auto bound = (*image)->bound();
 
@@ -253,7 +312,7 @@ static void _paintFrag(Frag& frag, Scene::Stack& stack, Opt<UsedBorders> usedBor
 
         stack.add(
             makeRc<Scene::Clip>(
-                _paintSVGRoot(*svgRoot, s.color),
+                _paintSVGRoot(*svgRoot),
                 frag.metrics.contentBox().cast<f64>()
             )
         );
