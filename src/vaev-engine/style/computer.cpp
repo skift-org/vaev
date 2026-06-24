@@ -151,6 +151,19 @@ export struct Computer {
                 value = 65534;
             values.table.cow().rowSpan = value;
         }
+
+        // https://html.spec.whatwg.org/multipage/obsolete.html#attr-table-align
+        if (auto const& [align] = el->getAttribute(Html::ALIGN_ATTR)) {
+            if (align == "left") {
+                values.text.cow().align = TextAlign::LEFT;
+            } else if (align == "right") {
+                values.text.cow().align = TextAlign::RIGHT;
+            } else if (align == "center") {
+                values.text.cow().align = TextAlign::CENTER;
+            } else if (align == "justify") {
+                values.text.cow().align = TextAlign::JUSTIFY;
+            }
+        }
     }
 
     // https://svgwg.org/specs/integration/#svg-css-sizing

@@ -28,8 +28,7 @@ struct Box : Meta::NoCopy {
 
     static Box fromInterruptedInlineBox(Box const& inlineBox) {
         auto oldProse = inlineBox.content.unwrap<Rc<Gfx::Prose>>();
-        Rc<Gfx::Prose> prose = makeRc<Gfx::Prose>(oldProse->_style);
-        prose->overrideSpanStackWith(*oldProse);
+        Rc<Gfx::Prose> prose = makeRc<Gfx::Prose>(oldProse->_style, oldProse->_currentSpan);
         return Box(inlineBox.style, prose, inlineBox.origin);
     }
 
@@ -53,11 +52,9 @@ struct Box : Meta::NoCopy {
         _children.pushBack(std::move(box));
     }
 
-    void startInlineBox(Gfx::ProseStyle proseStyle) {
+    void startInlineBox(Gfx::SpanStyle const& spanStyle) {
         auto prose = content.unwrap<Rc<Gfx::Prose>>();
-        prose->pushSpan();
-        if (proseStyle.color)
-            prose->spanColor(proseStyle.color.unwrap());
+        prose->pushSpan(spanStyle);
     }
 
     void endInlineBox() {
@@ -119,6 +116,14 @@ struct Box : Meta::NoCopy {
         return style->position == Keywords::ABSOLUTE or
                style->position == Keywords::FIXED or
                style->position.is<RunningPosition>();
+    }
+
+    // https://www.w3.org/TR/CSS22/zindex.html
+    bool impliesNewStackingContext() const {
+        return style->zIndex != Keywords::AUTO or
+               style->clip->has() or
+               style->transform->has() or
+               style->opacity != 1.0;
     }
 
     bool isActive() const {

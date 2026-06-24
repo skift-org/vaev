@@ -20,56 +20,66 @@ using namespace Karm;
 
 namespace Vaev::Driver {
 
-void _paintCornerMargin(Style::PageComputedValues& pageStyle, Scene::Stack& stack, RectAu const& rect, Style::PageArea area, usize currentPage, Layout::RunningPositionMap& runningPosition) {
+struct PageLayoutInfos {
+    usize pageNumber;
+    RectAu pageRect;
+    RectAu pageContent;
+    Rc<Style::PageComputedValues> pageStyle;
+    Layout::Breakpoint breakpoint;
+};
+
+void _paintCornerMargin(PageLayoutInfos& infos, Scene::Stack& stack, RectAu const& rect, Style::PageArea area, Layout::RunningPositionMap& runningPosition) {
     Layout::Tree tree{
-        .root = Layout::buildElement(pageStyle.area(area), currentPage, runningPosition),
+        .root = Layout::buildElement(infos.pageStyle->area(area), infos.pageNumber, runningPosition),
         .viewport = Layout::Viewport{.small = rect.size()}
     };
-    auto [_, frag] = Layout::layoutAndCommitRoot(
+    auto output = Layout::layoutRoot(
         tree,
         {
+            .generateFragment = true,
             .knownSize = rect.size().cast<Opt<Au>>(),
             .position = rect.topStart(),
             .availableSpace = rect.size(),
             .containingBlock = rect.size(),
         }
     );
-    Layout::paint(frag, stack);
+    Layout::paint(*output.fragment, stack);
 }
 
-void _paintMainMargin(Style::PageComputedValues& pageStyle, Scene::Stack& stack, RectAu const& rect, Style::PageArea mainArea, Array<Style::PageArea, 3> subAreas, usize currentPage, Layout::RunningPositionMap& runningPosition) {
-    auto box = Layout::buildElement(pageStyle.area(mainArea), currentPage, runningPosition);
+void _paintMainMargin(PageLayoutInfos& infos, Scene::Stack& stack, RectAu const& rect, Style::PageArea mainArea, Array<Style::PageArea, 3> subAreas, Layout::RunningPositionMap& runningPosition) {
+    auto box = Layout::buildElement(infos.pageStyle->area(mainArea), infos.pageNumber, runningPosition);
     for (auto subArea : subAreas) {
-        box.add(Layout::buildElement(pageStyle.area(subArea), currentPage, runningPosition));
+        box.add(Layout::buildElement(infos.pageStyle->area(subArea), infos.pageNumber, runningPosition));
     }
     Layout::Tree tree{
         .root = std::move(box),
         .viewport = Layout::Viewport{.small = rect.size()}
     };
-    auto [_, frag] = Layout::layoutAndCommitRoot(
+    auto output = Layout::layoutRoot(
         tree,
         {
+            .generateFragment = true,
             .knownSize = rect.size().cast<Opt<Au>>(),
             .position = rect.topStart(),
             .availableSpace = rect.size(),
             .containingBlock = rect.size(),
         }
     );
-    Layout::paint(frag, stack);
+    Layout::paint(*output.fragment, stack);
 }
 
-void _paintMargins(Style::PageComputedValues& pageStyle, RectAu pageRect, RectAu pageContent, Scene::Stack& stack, usize currentPage, Layout::RunningPositionMap& runningPosition) {
+void _paintMargins(PageLayoutInfos& infos, Scene::Stack& stack, Layout::RunningPositionMap& runningPosition) {
     // Compute all corner rects
-    auto topLeftMarginCornerRect = RectAu::fromTwoPoint(pageRect.topStart(), pageContent.topStart());
-    auto topRightMarginCornerRect = RectAu::fromTwoPoint(pageRect.topEnd(), pageContent.topEnd());
-    auto bottomLeftMarginCornerRect = RectAu::fromTwoPoint(pageRect.bottomStart(), pageContent.bottomStart());
-    auto bottomRightMarginCornerRect = RectAu::fromTwoPoint(pageRect.bottomEnd(), pageContent.bottomEnd());
+    auto topLeftMarginCornerRect = RectAu::fromTwoPoint(infos.pageRect.topStart(), infos.pageContent.topStart());
+    auto topRightMarginCornerRect = RectAu::fromTwoPoint(infos.pageRect.topEnd(), infos.pageContent.topEnd());
+    auto bottomLeftMarginCornerRect = RectAu::fromTwoPoint(infos.pageRect.bottomStart(), infos.pageContent.bottomStart());
+    auto bottomRightMarginCornerRect = RectAu::fromTwoPoint(infos.pageRect.bottomEnd(), infos.pageContent.bottomEnd());
 
     // Paint corners
-    _paintCornerMargin(pageStyle, stack, topLeftMarginCornerRect, Style::PageArea::TOP_LEFT_CORNER, currentPage, runningPosition);
-    _paintCornerMargin(pageStyle, stack, topRightMarginCornerRect, Style::PageArea::TOP_RIGHT_CORNER, currentPage, runningPosition);
-    _paintCornerMargin(pageStyle, stack, bottomLeftMarginCornerRect, Style::PageArea::BOTTOM_LEFT_CORNER, currentPage, runningPosition);
-    _paintCornerMargin(pageStyle, stack, bottomRightMarginCornerRect, Style::PageArea::BOTTOM_RIGHT_CORNER, currentPage, runningPosition);
+    _paintCornerMargin(infos, stack, topLeftMarginCornerRect, Style::PageArea::TOP_LEFT_CORNER, runningPosition);
+    _paintCornerMargin(infos, stack, topRightMarginCornerRect, Style::PageArea::TOP_RIGHT_CORNER, runningPosition);
+    _paintCornerMargin(infos, stack, bottomLeftMarginCornerRect, Style::PageArea::BOTTOM_LEFT_CORNER, runningPosition);
+    _paintCornerMargin(infos, stack, bottomRightMarginCornerRect, Style::PageArea::BOTTOM_RIGHT_CORNER, runningPosition);
 
     // Compute main area rects
     auto topRect = RectAu::fromTwoPoint(topLeftMarginCornerRect.topEnd(), topRightMarginCornerRect.bottomStart());
@@ -78,17 +88,104 @@ void _paintMargins(Style::PageComputedValues& pageStyle, RectAu pageRect, RectAu
     auto rightRect = RectAu::fromTwoPoint(topRightMarginCornerRect.bottomEnd(), bottomRightMarginCornerRect.topStart());
 
     // Paint main areas
-    _paintMainMargin(pageStyle, stack, topRect, Style::PageArea::TOP, {Style::PageArea::TOP_LEFT, Style::PageArea::TOP_CENTER, Style::PageArea::TOP_RIGHT}, currentPage, runningPosition);
-    _paintMainMargin(pageStyle, stack, bottomRect, Style::PageArea::BOTTOM, {Style::PageArea::BOTTOM_LEFT, Style::PageArea::BOTTOM_CENTER, Style::PageArea::BOTTOM_RIGHT}, currentPage, runningPosition);
-    _paintMainMargin(pageStyle, stack, leftRect, Style::PageArea::LEFT, {Style::PageArea::LEFT_TOP, Style::PageArea::LEFT_MIDDLE, Style::PageArea::LEFT_BOTTOM}, currentPage, runningPosition);
-    _paintMainMargin(pageStyle, stack, rightRect, Style::PageArea::RIGHT, {Style::PageArea::RIGHT_TOP, Style::PageArea::RIGHT_MIDDLE, Style::PageArea::RIGHT_BOTTOM}, currentPage, runningPosition);
+    _paintMainMargin(infos, stack, topRect, Style::PageArea::TOP, {Style::PageArea::TOP_LEFT, Style::PageArea::TOP_CENTER, Style::PageArea::TOP_RIGHT}, runningPosition);
+    _paintMainMargin(infos, stack, bottomRect, Style::PageArea::BOTTOM, {Style::PageArea::BOTTOM_LEFT, Style::PageArea::BOTTOM_CENTER, Style::PageArea::BOTTOM_RIGHT}, runningPosition);
+    _paintMainMargin(infos, stack, leftRect, Style::PageArea::LEFT, {Style::PageArea::LEFT_TOP, Style::PageArea::LEFT_MIDDLE, Style::PageArea::LEFT_BOTTOM}, runningPosition);
+    _paintMainMargin(infos, stack, rightRect, Style::PageArea::RIGHT, {Style::PageArea::RIGHT_TOP, Style::PageArea::RIGHT_MIDDLE, Style::PageArea::RIGHT_BOTTOM}, runningPosition);
 }
 
-struct PageLayoutInfos {
-    RectAu pageRect;
-    RectAu pageContent;
-    Rc<Style::PageComputedValues> pageStyle;
+struct PaginationContext {
+    Layout::Tree& contentTree;
+    Style::Media& media;
+    Print::Settings const& settings;
+    Style::Computer& computer;
+    Rc<Style::ComputedValues> initialStyle;
 };
+
+static InsetsAu _resolvePageMargin(Print::Margins marginSetting, Margin const& margin, RectAu pageRect) {
+    switch (marginSetting.named) {
+    case Print::Margins::NONE:
+        return {};
+
+    case Print::Margins::DEFAULT: {
+        Layout::Resolver resolver{};
+        return {
+            resolver.resolve(margin.top, pageRect.height),
+            resolver.resolve(margin.end, pageRect.width),
+            resolver.resolve(margin.bottom, pageRect.height),
+            resolver.resolve(margin.start, pageRect.width),
+        };
+    }
+
+    case Print::Margins::MINIMUM:
+        // FIXME: Supposed to be the minimum supported by the printer
+        return {};
+
+    case Print::Margins::CUSTOM:
+        return marginSetting.custom.cast<Au>();
+
+    default:
+        unreachable();
+    }
+}
+
+Vec<PageLayoutInfos> collectBreakPointsAndRunningPositions(Layout::RunningPositionMap& runningPosition, PaginationContext& context) {
+    auto startOfDocument = Layout::Breakpoint::startOfDocument();
+    Vec<PageLayoutInfos> pageInfos = {};
+
+    while (true) {
+        Style::Page page{
+            .name = ""s,
+            .number = pageInfos.len() + 1,
+            .blank = false,
+        };
+
+        auto pageStyle = context.computer.computeFor(*context.initialStyle, page);
+        auto pageRect = RectAu{context.media.scaledViewport()};
+        auto pageContent = pageRect.shrink(
+            _resolvePageMargin(context.settings.margins, *pageStyle->style->margin, pageRect)
+        );
+
+        Layout::Input pageLayoutInput{
+            .knownSize = {pageContent.width, NONE},
+            .position = pageContent.topStart(),
+            .availableSpace = pageContent.size(),
+            .containingBlock = pageContent.size(),
+            .runningPosition = {&runningPosition},
+            .pageNumber = page.number,
+            .breakpointTraverser = Layout::BreakpointTraverser(pageInfos ? &last(pageInfos).breakpoint : &startOfDocument),
+        };
+
+        context.contentTree.viewport = {
+            .small = pageContent.size(),
+        };
+        context.contentTree.fc = {pageContent.size()};
+        context.contentTree.fc.enterDiscovery();
+
+        auto outDiscovery = Layout::layoutRoot(
+            context.contentTree,
+            pageLayoutInput
+        );
+
+        context.contentTree.fc.leaveDiscovery();
+
+        Layout::Breakpoint currBreakpoint =
+            outDiscovery.completelyLaidOut
+                ? Layout::Breakpoint::classB(1, false)
+                : outDiscovery.breakpoint.unwrap();
+
+        pageInfos.pushBack({
+            page.number,
+            pageRect,
+            pageContent,
+            pageStyle,
+            currBreakpoint,
+        });
+
+        if (outDiscovery.completelyLaidOut)
+            return pageInfos;
+    }
+}
 
 export Yield<Print::Page> print(Gc::Heap& heap, Gc::Ref<Dom::Document> dom, Print::Settings const& settings) {
     auto media = Style::Media::forPrint(settings);
@@ -106,7 +203,6 @@ export Yield<Print::Page> print(Gc::Heap& heap, Gc::Ref<Dom::Document> dom, Prin
     // MARK: Page and Margins --------------------------------------------------
 
     auto initialStyle = dom->registeredPropertySet.initialComputedValues();
-    initialStyle->color = Gfx::BLACK;
     initialStyle->setCustomProp("-vaev-url", {Css::Token::string(Io::format("\"{}\"", dom->url()))});
     initialStyle->setCustomProp("-vaev-title", {Css::Token::string(Io::format("\"{}\"", dom->title()))});
     initialStyle->setCustomProp("-vaev-datetime", {Css::Token::string(Io::format("\"{}\"", Sys::now()))});
@@ -117,92 +213,58 @@ export Yield<Print::Page> print(Gc::Heap& heap, Gc::Ref<Dom::Document> dom, Prin
         Layout::buildDocument(dom),
     };
 
-    Layout::RunningPositionMap runningPosition = {}; // Mapping the different Running positions to their respective names and their page.
-
-    RectAu pageRect{
-        media.width / media.resolution.toDppx(),
-        media.height / media.resolution.toDppx()
+    Layout::RunningPositionMap runningPosition = {};
+    PaginationContext paginationContext{
+        .contentTree = contentTree,
+        .media = media,
+        .settings = settings,
+        .computer = computer,
+        .initialStyle = initialStyle,
     };
 
-    usize pageNumber = 1;
-    Layout::Breakpoint prevBreakpoint{
-        .endIdx = 0,
-        .advance = Layout::Breakpoint::Advance::WITHOUT_CHILDREN
-    };
+    auto startOfDocument = Layout::Breakpoint::startOfDocument();
+    auto pageInfos = collectBreakPointsAndRunningPositions(runningPosition, paginationContext);
 
-    while (true) {
-        Style::Page page{
-            .name = ""s,
-            .number = pageNumber,
-            .blank = false,
-        };
-
-        Rc<Style::PageComputedValues> pageStyle = computer.computeFor(*initialStyle, page);
-
-        InsetsAu pageMargin;
-
-        if (settings.margins == Print::Margins::DEFAULT) {
-            Layout::Resolver resolver{};
-            pageMargin = {
-                resolver.resolve(pageStyle->style->margin->top, pageRect.height),
-                resolver.resolve(pageStyle->style->margin->end, pageRect.width),
-                resolver.resolve(pageStyle->style->margin->bottom, pageRect.height),
-                resolver.resolve(pageStyle->style->margin->start, pageRect.width),
-            };
-        } else if (settings.margins == Print::Margins::CUSTOM) {
-            pageMargin = settings.margins.custom.template cast<Au>();
-        } else if (settings.margins == Print::Margins::MINIMUM) {
-            pageMargin = {};
-        }
-
-        RectAu pageContent = pageRect.shrink(pageMargin);
-
-        contentTree.viewport = {.small = pageContent.size()};
-        contentTree.fc = {pageContent.size()};
-
+    for (auto [infos, i] : iter(pageInfos) | Index()) {
         Layout::Input pageLayoutInput{
-            .knownSize = {pageContent.width, NONE},
-            .position = pageContent.topStart(),
-            .availableSpace = pageContent.size(),
-            .containingBlock = pageContent.size(),
-            .runningPosition = {&runningPosition},
-            .pageNumber = pageNumber,
+            .generateFragment = true,
+            .knownSize = {infos.pageContent.width, NONE},
+            .position = infos.pageContent.topStart(),
+            .availableSpace = infos.pageContent.size(),
+            .containingBlock = infos.pageContent.size(),
+            .pageNumber = infos.pageNumber,
+            .breakpointTraverser = {
+                i == 0 ? &startOfDocument : &pageInfos[i - 1].breakpoint,
+                &infos.breakpoint,
+            }
         };
-        contentTree.fc.enterDiscovery();
 
-        auto [output, frag] = Layout::layoutAndCommitRoot(
+        contentTree.viewport = {
+            .small = infos.pageContent.size(),
+        };
+        auto output = Layout::layoutRoot(
             contentTree,
-            pageLayoutInput.withBreakpointTraverser(Layout::BreakpointTraverser(&prevBreakpoint))
+            pageLayoutInput
         );
-
-        Layout::Breakpoint currBreakpoint =
-            output.completelyLaidOut
-                ? Layout::Breakpoint::classB(1, false)
-                : output.breakpoint.unwrap();
-
-        contentTree.fc.leaveDiscovery();
 
         auto pageStack = makeRc<Scene::Stack>();
         if (settings.headerFooter and settings.margins != Print::Margins::NONE)
-            _paintMargins(*pageStyle, pageRect, pageContent, *pageStack, page.number, runningPosition);
+            _paintMargins(
+                infos,
+                *pageStack,
+                runningPosition
+            );
 
-        Layout::paint(frag, *pageStack);
-
+        Layout::paint(*output.fragment, *pageStack);
         pageStack->prepare();
 
         co_yield Print::Page(
             settings.pageSize().cast<f64>(),
             makeRc<Scene::Transform>(
                 pageStack,
-                Math::Trans2f::scale(media.resolution.toDppx())
+                Math::Trans2f::scale(media.scale())
             )
         );
-
-        if (output.completelyLaidOut)
-            break;
-
-        prevBreakpoint = output.breakpoint.take();
-        pageNumber++;
     }
 }
 

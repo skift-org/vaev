@@ -15,11 +15,12 @@ import :values;
 namespace Vaev::Driver {
 
 static auto dumpFragments = Debug::Flag::debug("web-fragments"s, "Dump the constructed fragments"s);
+static auto dumpScene = Debug::Flag::debug("web-scene"s, "Dump the constructed scene"s);
 
 export struct RenderResult {
     Rc<Layout::Box> layout;
     Rc<Scene::Node> scenes;
-    Rc<Layout::Frag> frag;
+    Rc<Layout::Fragment> frag;
 };
 
 export RenderResult render(Gc::Heap& heap, Gc::Ref<Dom::Document> dom, Style::Media const& media, Layout::Viewport viewport) {
@@ -39,9 +40,10 @@ export RenderResult render(Gc::Heap& heap, Gc::Ref<Dom::Document> dom, Style::Me
         viewport
     };
 
-    auto [outDiscovery, root] = Layout::layoutAndCommitRoot(
+    auto outDiscovery = Layout::layoutRoot(
         tree,
         {
+            .generateFragment = true,
             .knownSize = {viewport.small.width, NONE},
             .availableSpace = {viewport.small.width, 0_au},
             .containingBlock = {viewport.small.width, viewport.small.height},
@@ -49,16 +51,19 @@ export RenderResult render(Gc::Heap& heap, Gc::Ref<Dom::Document> dom, Style::Me
     );
 
     auto sceneRoot = makeRc<Scene::Stack>();
-    Layout::paint(root, *sceneRoot);
+    Layout::paint(*outDiscovery.fragment, *sceneRoot);
     sceneRoot->prepare();
 
     if (dumpFragments)
-        logDebugIf(dumpFragments, "fragments: {}", root);
+        logDebugIf(dumpFragments, "fragments: {}", *outDiscovery.fragment);
+
+    if (dumpScene)
+        logDebugIf(dumpScene, "scene: {}", sceneRoot);
 
     return {
         makeRc<Layout::Box>(std::move(tree.root)),
         sceneRoot,
-        makeRc<Layout::Frag>(std::move(root)),
+        *outDiscovery.fragment,
     };
 }
 

@@ -1,10 +1,10 @@
 {
-    "$schema": "https://schemas.cute.engineering/stable/cutekit.manifest.project.v1",
+    "$schema": "https://schemas.cute.engineering/stable/cutekit.manifest.project.v2",
     "id": "skift/vaev",
     "type": "project",
     "version": "v0.1.0",
     "description": "A lightning-fast, lightweight, and secure HTML/CSS engine",
-    "extern": {
+    "externs": {
         "skift/karm": {
             "git": "https://codeberg.org/skift/karm.git",
             "tag": "main"

@@ -1201,10 +1201,10 @@ export struct TableFormatingContext : FormatingContext {
                     tree,
                     *cell.box,
                     {
+                        .usedSpacings = usedSpacings,
                         .knownSize = {colWidth[j], NONE},
                         .containingBlock = {tableUsedWidth, 0_au},
-                    },
-                    usedSpacings
+                    }
                 );
 
                 for (usize k = 0; k < rowSpan; k++) {
@@ -1379,16 +1379,6 @@ export struct TableFormatingContext : FormatingContext {
         //
         //       (See https://www.w3.org/TR/CSS22/tables.html#height-layout)
         auto colSpan = cell.box->style->table->colSpan;
-        Input childInput{
-            .knownSize = {
-                colWidthPref.query(j, j + colSpan - 1) + spacing.x * (colSpan - 1),
-                verticalSize,
-            },
-            .position = {currPositionX, startPositionY},
-            .containingBlock = tableBoxSize,
-            .breakpointTraverser = breakpointsForCell,
-            .pendingVerticalSizes = input.pendingVerticalSizes,
-        };
 
         auto collapsedBorders =
             useBordersCollapse
@@ -1404,16 +1394,27 @@ export struct TableFormatingContext : FormatingContext {
                            : computeBorders(tree, *cell.box),
         };
 
-        auto outputCell = input.fragment
-                              ? layoutAndCommitBorderBox(tree, *cell.box, childInput, *input.fragment, usedSpacings)
-                              : layoutBorderBox(tree, *cell.box, childInput, usedSpacings);
+        Input childInput{
+            .generateFragment = input.generateFragment,
+            .usedSpacings = usedSpacings,
+            .knownSize = {
+                colWidthPref.query(j, j + colSpan - 1) + spacing.x * (colSpan - 1),
+                verticalSize,
+            },
+            .position = {currPositionX, startPositionY},
+            .containingBlock = tableBoxSize,
+            .breakpointTraverser = breakpointsForCell,
+            .pendingVerticalSizes = input.pendingVerticalSizes,
+        };
 
-        if (input.fragment and useBordersCollapse) {
+        auto outputCell = layoutBorderBox(tree, *cell.box, childInput);
+
+        if (input.generateFragment and useBordersCollapse) {
             boxBorderMapping->put((usize)cellBox.buf(), *collapsedBorders);
         }
 
         if (tree.fc.isDiscoveryMode()) {
-            if (cellBox->style->break_->inside == BreakInside::AVOID) {
+            if (oneOf(cellBox->style->break_->inside, BreakInside::AVOID, BreakInside::AVOID_PAGE)) {
                 outputCell.breakpoint.unwrap().withAppeal(Breakpoint::Appeal::AVOID);
             }
         }
@@ -1434,7 +1435,7 @@ export struct TableFormatingContext : FormatingContext {
         Vec<bool> isBottom = {};
     };
 
-    RowOutput layoutRow(Tree& tree, Input input, usize startFrag, usize i, Vec2Au currPosition, bool isBreakpointedRow, usize breakpointIndexOffset = 0) {
+    RowOutput layoutRow(Tree& tree, Input input, FragmentBuilder& fragBuilder, usize startFrag, usize i, Vec2Au currPosition, bool isBreakpointedRow, usize breakpointIndexOffset) {
         startPositionOfRow[i] = currPosition.y;
 
         RowOutput outputRow;
@@ -1469,6 +1470,10 @@ export struct TableFormatingContext : FormatingContext {
             } else {
                 outputRow.sizeY = max(outputRow.sizeY, cellHeight);
             }
+
+            if (auto [frag] = outputCell.fragment)
+                fragBuilder.addChild(frag);
+
             outputRow.someBottomsUncompleteLaidOut |= isBottomCell and not outputCell.completelyLaidOut;
         };
 
@@ -1537,15 +1542,15 @@ export struct TableFormatingContext : FormatingContext {
     bool handleUnforcedBreakpointsInsideAndAfterRow(Box& box, Breakpoint& currentBreakpoint, RowOutput outputRow, usize i, Vec2Au fragmentainerSize) {
         bool rowIsFreelyFragmentable = isFreelyFragmentableRow(i, fragmentainerSize);
 
-        bool avoidBreakInsideTable = box.style->break_->inside == BreakInside::AVOID;
+        bool avoidBreakInsideTable = oneOf(box.style->break_->inside, BreakInside::AVOID, BreakInside::AVOID_PAGE);
 
         bool avoidBreakInsideRow =
             rowGroupIdxs[i].axisIdx and
-            rows[rowGroupIdxs[i].axisIdx.unwrap()].el.style->break_->inside == BreakInside::AVOID;
+            oneOf(rows[rowGroupIdxs[i].axisIdx.unwrap()].el.style->break_->inside, BreakInside::AVOID, BreakInside::AVOID_PAGE);
 
         bool avoidBreakInsideRowGroup =
             rowGroupIdxs[i].groupIdx and
-            rowGroups[rowGroupIdxs[i].groupIdx.unwrap()].el.style->break_->inside == BreakInside::AVOID;
+            oneOf(rowGroups[rowGroupIdxs[i].groupIdx.unwrap()].el.style->break_->inside, BreakInside::AVOID, BreakInside::AVOID_PAGE);
 
         if (rowIsFreelyFragmentable) {
             // breakpoint inside of row, take in consideration ALL breakpoints
@@ -1578,7 +1583,7 @@ export struct TableFormatingContext : FormatingContext {
         return true;
     }
 
-    Tuple<bool, Opt<Breakpoint>> layoutRows(Tree& tree, Box& box, Input input, usize startAt, usize stopAt, Au currPositionX, Au& currPositionY, bool shouldRepeatHeaderAndFooter) {
+    Tuple<bool, Opt<Breakpoint>> layoutRows(Tree& tree, Box& box, Input input, FragmentBuilder& fragBuilder, usize startAt, usize stopAt, Au currPositionX, Au& currPositionY, bool shouldRepeatHeaderAndFooter) {
         bool completelyLaidOut = false;
         Opt<Breakpoint> rowBreakpoint = NONE;
 
@@ -1592,7 +1597,8 @@ export struct TableFormatingContext : FormatingContext {
 
         for (usize i = startAt; i < stopAt; i++) {
             auto rowOutput = layoutRow(
-                tree, input, startAt,
+                tree, input, fragBuilder,
+                startAt,
                 i,
                 Vec2Au{currPositionX, currPositionY},
                 i + 1 == stopAt,
@@ -1616,13 +1622,14 @@ export struct TableFormatingContext : FormatingContext {
         return {completelyLaidOut, rowBreakpoint};
     }
 
-    void layoutHeaderFooterRows(Tree& tree, Input input, usize startFrag, Au currPositionX, Au& currPositionY, usize start, usize len) {
+    void layoutHeaderFooterRows(Tree& tree, Input input, FragmentBuilder& fragBuilder, usize startFrag, Au currPositionX, Au& currPositionY, usize start, usize len) {
         for (usize i = 0; i < len; i++) {
             auto _ = layoutRow(
                 tree,
                 input.withBreakpointTraverser(BreakpointTraverser()),
+                fragBuilder,
                 startFrag, start + i,
-                Vec2Au{currPositionX, currPositionY}, false
+                Vec2Au{currPositionX, currPositionY}, false, 0
             );
             currPositionY += rowHeight[i] + spacing.y;
         }
@@ -1645,6 +1652,8 @@ export struct TableFormatingContext : FormatingContext {
     }
 
     Output run(Tree& tree, Box& box, Input input, usize startAtTable, Opt<usize> stopAtTable) override {
+        auto fragBuilder = FragmentBuilder{tree, box};
+
         // TODO: - vertical and horizontal alignment
         //       - borders collapse
         // TODO: in every row, at least one cell must be an anchor, or else this row is 'skipable'
@@ -1670,14 +1679,15 @@ export struct TableFormatingContext : FormatingContext {
 
         if (shouldRepeatHeaderAndFooter)
             layoutHeaderFooterRows(
-                tree, input,
+                tree, input, fragBuilder,
                 startAt,
                 currPositionX, currPositionY,
-                0, numOfHeaderRows
+                0,
+                numOfHeaderRows
             );
 
         auto [completelyLaidOut, breakpoint] = layoutRows(
-            tree, box, input,
+            tree, box, input, fragBuilder,
             startAt, stopAt,
             currPositionX, currPositionY,
             shouldRepeatHeaderAndFooter
@@ -1689,14 +1699,21 @@ export struct TableFormatingContext : FormatingContext {
 
         if (shouldRepeatHeaderAndFooter)
             layoutHeaderFooterRows(
-                tree, input,
+                tree, input, fragBuilder,
                 startAt,
                 currPositionX, currPositionY,
-                grid.size.y - numOfFooterRows, numOfFooterRows
+                grid.size.y - numOfFooterRows,
+                numOfFooterRows
             );
 
+        auto size = Vec2Au{
+            tableUsedWidth,
+            currPositionY - startingPositionY,
+        };
+
         return Output{
-            .size = {tableUsedWidth, currPositionY - startingPositionY},
+            .fragment = fragBuilder.buildBoxFromInput(input, size),
+            .size = size,
             .completelyLaidOut = completelyLaidOut,
             .breakpoint = tree.fc.isDiscoveryMode() ? Opt{breakpoint} : NONE,
         };
